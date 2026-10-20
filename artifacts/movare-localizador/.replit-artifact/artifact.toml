@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "Movare Localizador"
+description = "Editor mobile-first de mapas de depósito, com desenho vetorial de áreas e divisórias, plantas independentes por local e salvamento e backup no dispositivo."
+version = "1.0.0"
+id = "artifacts/movare-localizador"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 25563
+
+[services.development]
+run = "pnpm --filter @workspace/movare-localizador run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/movare-localizador", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/movare-localizador/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "25563"
+BASE_PATH = "/"

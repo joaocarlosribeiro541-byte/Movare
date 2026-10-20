@@ -1,0 +1,13 @@
+{
+  "name": "movare-workspace",
+  "version": "0.0.0",
+  "private": true,
+  "workspaces": [
+    "artifacts/movare-localizador"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace=@workspace/movare-localizador",
+    "build": "npm run build --workspace=@workspace/movare-localizador",
+    "serve": "npm run serve --workspace=@workspace/movare-localizador"
+  }
+}

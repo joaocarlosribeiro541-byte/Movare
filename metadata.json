@@ -1,0 +1,8 @@
+{
+  "name": "Movare - Localizador e Editor de Mapas",
+  "description": "Editor e localizador de mapas interativos para visualização de layout de armazém e áreas.",
+  "permissions": [],
+  "capabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
