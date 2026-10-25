@@ -322,7 +322,16 @@
 
 :root { color-scheme: light; }
 * { box-sizing: border-box; }
-body { margin: 0; min-width: 320px; }
+html, body, #root {
+  height: 100%;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  touch-action: none;
+  -webkit-touch-callout: none;
+}
+body { min-width: 320px; }
 button, input, select { font: inherit; }
 button { cursor: pointer; }
 
