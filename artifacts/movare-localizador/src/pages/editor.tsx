@@ -34,8 +34,11 @@ import { ScaleCalibrationDialog } from '../components/scale-calibration-dialog';
 import { WarehouseSizeDialog } from '../components/warehouse-size-dialog';
 import { LayersManagerDialog } from '../components/layers-manager-dialog';
 import { MovareSplashScreen } from '../components/movare-splash-screen';
-import { WarehouseLegendSidebar } from '../components/warehouse-legend-sidebar';
 import { ZoneInternalPositionsManager } from '../components/zone-positions-manager';
+import {
+  WarehouseGeographicLegendSVG,
+  FloatingGeographicLegendButton,
+} from '../components/geographic-legend';
 import {
   recalculatePositionsOnZoneResize,
   getDefaultLayoutForCategory,
@@ -228,7 +231,8 @@ export default function Editor() {
   const constrainCamera = useCallback((next: Camera): Camera => {
     if (!canvasSize.width || !canvasSize.height) return next;
     const visibleMargin = 40;
-    const scaledWidth = worldWidth * next.scale;
+    const totalWidth = worldWidth + 330;
+    const scaledWidth = totalWidth * next.scale;
     const scaledHeight = worldHeight * next.scale;
     return {
       ...next,
@@ -302,14 +306,16 @@ export default function Editor() {
   const fitPlan = useCallback(() => {
     if (!canvasSize.width || !canvasSize.height) return;
     const padding = window.innerWidth < 640 ? 24 : 60;
+    const totalContentWidth = worldWidth + 320;
+    const totalContentHeight = Math.max(worldHeight, 480);
     const scale = Math.max(
       0.08,
-      Math.min((canvasSize.width - padding) / worldWidth, (canvasSize.height - padding) / worldHeight, 1.4)
+      Math.min((canvasSize.width - padding) / totalContentWidth, (canvasSize.height - padding) / totalContentHeight, 1.4)
     );
     setCameraSafe({
       scale,
-      x: (canvasSize.width - worldWidth * scale) / 2,
-      y: (canvasSize.height - worldHeight * scale) / 2,
+      x: (canvasSize.width - totalContentWidth * scale) / 2,
+      y: (canvasSize.height - totalContentHeight * scale) / 2,
     });
   }, [canvasSize.width, canvasSize.height, setCameraSafe, worldHeight, worldWidth]);
 
@@ -1266,14 +1272,109 @@ export default function Editor() {
   };
 
   // Salva novas dimensões do galpão (WarehouseSizeDialog)
-  const handleSaveWarehouseDimensions = (wMeters: number, hMeters: number) => {
-    patchActive((area) => ({
-      ...area,
-      widthMeters: wMeters,
-      heightMeters: hMeters,
-    }));
-    setToast(`Dimensão alterada para ${wMeters}m × ${hMeters}m (${(wMeters * hMeters).toLocaleString('pt-BR')} m²).`);
-    setTimeout(() => fitPlan(), 100);
+  // As zonas diminuem proporcionalmente mantendo posição e 100% dos produtos internos sem deformar o formato
+  const handleSaveWarehouseDimensions = (newWMeters: number, newHMeters: number, scaleElements: boolean = true) => {
+    const oldBounds = getAreaBounds(activeArea);
+    const oldWPx = oldBounds.widthPx;
+    const oldHPx = oldBounds.heightPx;
+    const newWPx = Math.round(newWMeters * scaleRatio);
+    const newHPx = Math.round(newHMeters * scaleRatio);
+
+    if (newWPx === oldWPx && newHPx === oldHPx) return;
+
+    const scaleFactorX = newWPx / oldWPx;
+    const scaleFactorY = newHPx / oldHPx;
+
+    // Fator uniforme para garantir ZERO deformação (proporções e aspecto da zona 100% inalterados)
+    // Se o barracão estiver diminuindo, reduz proporcionalmente com a menor razão para caber perfeitamente
+    const isShrinking = scaleFactorX < 1 || scaleFactorY < 1;
+    const uniformScale = scaleElements
+      ? (isShrinking ? Math.min(scaleFactorX, scaleFactorY) : 1)
+      : 1;
+
+    patchActive((area) => {
+      const updatedElements = area.elements.map((el) => {
+        // Nova largura e altura proporcionais com fator uniforme: a zona NÃO se deforma!
+        const newWidth = Math.max(12, Math.round(el.width * uniformScale));
+        const newHeight = Math.max(12, Math.round(el.height * uniformScale));
+
+        // Mapeamento proporcional de posição: preserva a localização relativa no barracão
+        const relCenterX = (el.x + el.width / 2) / oldWPx;
+        const relCenterY = (el.y + el.height / 2) / oldHPx;
+
+        const targetCenterX = relCenterX * newWPx;
+        const targetCenterY = relCenterY * newHPx;
+
+        let newX = Math.round(targetCenterX - newWidth / 2);
+        let newY = Math.round(targetCenterY - newHeight / 2);
+
+        // Limita para que nenhuma zona fique fora do perímetro do novo barracão
+        newX = Math.max(0, Math.min(Math.max(0, newWPx - newWidth), newX));
+        newY = Math.max(0, Math.min(Math.max(0, newHPx - newHeight), newY));
+
+        // Posições internas: mantém 100% da quantidade, códigos e produtos internos intactos
+        const updatedInternalPositions = el.internalPositions?.map((pos) => {
+          const newRelX = Math.round(pos.relX * uniformScale * 10) / 10;
+          const newRelY = Math.round(pos.relY * uniformScale * 10) / 10;
+          const newRelW = Math.max(4, Math.round(pos.relWidth * uniformScale * 10) / 10);
+          const newRelH = Math.max(4, Math.round(pos.relHeight * uniformScale * 10) / 10);
+
+          return {
+            ...pos,
+            relX: newRelX,
+            relY: newRelY,
+            relWidth: newRelW,
+            relHeight: newRelH,
+            widthMeters: Math.round((newRelW / scaleRatio) * 100) / 100,
+            depthMeters: Math.round((newRelH / scaleRatio) * 100) / 100,
+          };
+        });
+
+        const updatedInternalLayout = el.internalLayout
+          ? {
+              ...el.internalLayout,
+              unitWidthMeters: el.internalLayout.unitWidthMeters ? Math.round(el.internalLayout.unitWidthMeters * uniformScale * 100) / 100 : undefined,
+              unitDepthMeters: el.internalLayout.unitDepthMeters ? Math.round(el.internalLayout.unitDepthMeters * uniformScale * 100) / 100 : undefined,
+              rowDepthMeters: el.internalLayout.rowDepthMeters ? Math.round(el.internalLayout.rowDepthMeters * uniformScale * 100) / 100 : undefined,
+              clearanceMeters: el.internalLayout.clearanceMeters ? Math.round(el.internalLayout.clearanceMeters * uniformScale * 100) / 100 : undefined,
+              marginMeters: el.internalLayout.marginMeters ? Math.round(el.internalLayout.marginMeters * uniformScale * 100) / 100 : undefined,
+            }
+          : undefined;
+
+        if (el.type === 'corridor') {
+          return {
+            ...el,
+            x: newX,
+            y: newY,
+            width: newWidth,
+            height: newHeight,
+            fontSize: el.fontSize ? Math.max(7, Math.round(el.fontSize * uniformScale)) : undefined,
+          };
+        }
+
+        return {
+          ...el,
+          x: newX,
+          y: newY,
+          width: newWidth,
+          height: newHeight,
+          internalPositions: updatedInternalPositions,
+          internalLayout: updatedInternalLayout,
+        };
+      });
+
+      return {
+        ...area,
+        widthMeters: newWMeters,
+        heightMeters: newHMeters,
+        elements: updatedElements,
+      };
+    });
+
+    setToast(
+      `Galpão alterado para ${newWMeters}m × ${newHMeters}m. As zonas e posições internas foram ajustadas proporcionalmente sem deformação.`
+    );
+    setTimeout(() => fitPlan(), 120);
   };
 
   // Atualiza porte do volume / categoria e recalcula posições internas dividindo a área automaticamente
@@ -1678,7 +1779,7 @@ export default function Editor() {
           </div>
         </aside>
 
-        {/* CONTAINER DO CANVAS COM WHEEL ZOOM & TOUCH CONTROL */}
+        {/* 2. CONTAINER DO CANVAS COM WHEEL ZOOM & TOUCH CONTROL (SEM MENU SPLIT) */}
         <div className="flex-1 flex flex-col overflow-hidden relative">
           {/* RÉGUA HORIZONTAL (APENAS DESKTOP MD+) */}
           <div
@@ -1909,6 +2010,24 @@ export default function Editor() {
                       COMPRIMENTO: {bounds.heightMeters}m ({worldHeight}px)
                     </text>
                   </g>
+
+                  {/* LEGENDA GEOGRÁFICA SIMPLES FIXADA AO LADO DO PERÍMETRO DO BARRACÃO */}
+                  <WarehouseGeographicLegendSVG
+                    elements={activeArea.elements}
+                    selectedId={selectedId}
+                    onSelectZone={(zone) => {
+                      setSelectedId(zone.id);
+                      setSelectedPositionId(null);
+                      navigateToPoint(zone.x + zone.width / 2, zone.y + zone.height / 2, 1.3);
+                      setDesktopSidebarOpen(true);
+                      setMobileDrawerOpen(true);
+                      setToast(`Zona focalizada: ${zone.name}`);
+                    }}
+                    scaleRatio={scaleRatio}
+                    worldWidth={worldWidth}
+                    worldHeight={worldHeight}
+                    isDark={isDark}
+                  />
 
                   {/* ELEMENTOS VISÍVEIS */}
                   {visibleItems.map((item) => {
@@ -2912,22 +3031,27 @@ export default function Editor() {
                 </div>
               </button>
 
-              {/* LEGENDA LATERAL FIXA FORA DO LIMITE DO BARRACÃO (IMUNE A ZOOM E NAVEGAÇÃO) */}
-              <WarehouseLegendSidebar
-                elements={activeArea.elements}
-                selectedId={selectedId}
-                onSelectZone={(zone) => {
-                  setSelectedId(zone.id);
-                  setSelectedPositionId(null);
-                  navigateToPoint(zone.x + zone.width / 2, zone.y + zone.height / 2, 1.3);
-                  setDesktopSidebarOpen(true);
-                  setMobileDrawerOpen(true);
-                  setToast(`Zona focalizada: ${zone.name}`);
-                }}
-                scaleRatio={scaleRatio}
-                isDark={isDark}
-                isDraggingCanvas={isDragging}
-              />
+              {/* BOTÃO FLUTUANTE DE LEGENDA RÁPIDA (SEM MENU SPLIT) */}
+              <div className="absolute bottom-5 right-4 z-20">
+                <FloatingGeographicLegendButton
+                  elements={activeArea.elements}
+                  selectedId={selectedId}
+                  onSelectZone={(zone) => {
+                    setSelectedId(zone.id);
+                    setSelectedPositionId(null);
+                    navigateToPoint(zone.x + zone.width / 2, zone.y + zone.height / 2, 1.3);
+                    setDesktopSidebarOpen(true);
+                    setMobileDrawerOpen(true);
+                    setToast(`Zona focalizada: ${zone.name}`);
+                  }}
+                  scaleRatio={scaleRatio}
+                  isDark={isDark}
+                  onFocusPerimeterLegend={() => {
+                    navigateToPoint(worldWidth + 170, 200, 1.0);
+                    setToast('Focalizando legenda no perímetro do barracão');
+                  }}
+                />
+              </div>
             </div>
           </div>
         </div>

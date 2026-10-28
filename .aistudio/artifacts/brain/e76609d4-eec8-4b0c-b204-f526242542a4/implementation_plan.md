@@ -168,8 +168,17 @@ Sistema profissional de gestão visual e mapeamento de armazém (WMS), unindo ed
 - **Layout de Busca WMS Aprimorado & Botão Flutuante com Lupa**:
   - **Botão Flutuante FAB**: Botão fixado no canvas (`bottom-5 left-4`) com ícone de lupa, badge estilizado e atalho `Ctrl+K` para acesso imediato em qualquer resolução (especialmente no mobile e tablets).
   - **Modal WMS Enriquecido**: Chips de busca rápida para prefixos populares (`GEL`, `FOG`, `COL`, `SOF`, `MÓV`, `RUA`, `DOCAS`), cartões de resultado com destaque de status de estoque, dimensões e categoria, e atalho de teclado `ESC`.
-- **Legenda Lateral Fixa de Zonas & Características**:
-  - `WarehouseLegendSidebar`: Painel lateral fixo (`left-14 top-16`) fora dos limites da planta, 100% imune a movimentações de câmera, pan ou zoom.
-  - Exibe a paleta cromática de cada zona criada com: nome, badge de categoria (com sua respectiva cor), porte de volume (ex: Geladeiras, Sofás, Colchões), dimensões em metros e m², e contagem de posições/ocupação.
-  - **Foco Interativo**: Clicar em qualquer item da legenda centraliza suavemente a câmera na respectiva zona e abre os detalhes para inspeção.
+- **Legenda Lateral Escolar (Fixa Fora do Perímetro do Mapa)**:
+  - `WarehouseLegendSidebar`: Posicionada como uma coluna lateral dedicada fora do perímetro do mapa CAD, entre a barra de ferramentas e a área gráfica, totalmente desacoplada de zoom e pan.
+  - **Design Baseado em Mapas de Escola & Atlas Cartográficos**:
+    - **Quadro de Convenções Cartográficas**: Moldura clássica com cabeçalho didático formal e selo "ATLAS WMS".
+    - **Rosa dos Ventos Clássica**: Indicador geométrico em SVG com estrela de 4 pontas facetada (Norte, Sul, Leste, Oeste) e orientação espacial.
+    - **Escala Gráfica Escolar**: Barra segmentada com blocos alternados bicolores e graduação métrica (`0m - 5m - 10m - 20m`).
+    - **Convenções Temáticas de Zonas & Biomas de Armazenagem**: Patches de cor numerados com borda contrastante, tipologia de carga, badges didáticos de produto e micro barra de ocupação.
+    - **Convenções de Infraestrutura**: Símbolos padronizados para corredores de circulação (`═ ═`), porta-paletes verticais (`▤`), divisórias CAD (`❚`) e células individuais (`#`).
+    - **Modo Lombada / Espinha Cartográfica**: Recolhível com 1 clique para uma aba vertical estilizada com texto rotacionado no padrão de lombada de livro didático.
+- **Correção de Sourcemap e Build no Vite**:
+  - Removida a diretiva `'use client'` desnecessária do componente `src/components/ui/tooltip.tsx` e demais componentes UI shadcn (remanescente de bibliotecas Next.js que causava descompasso de sourcemap no bundler Vite/Rollup).
+  - Padronizado o import de utilitários `import { cn } from '@/lib/utils'` em `tooltip.tsx`.
+  - O build agora é executado de forma completamente limpa com 100% dos módulos transformados sem avisos de sourcemap.
 
