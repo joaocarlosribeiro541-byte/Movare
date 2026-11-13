@@ -19,6 +19,9 @@ export type SearchResult = {
   address?: string;
   sku?: string;
   description?: string;
+  model?: string;
+  supplier?: string;
+  volumesPerItem?: number;
   status?: RackSlot['status'] | PositionStockStatus;
   productSize?: ProductSize;
   category?: string;
@@ -77,6 +80,9 @@ export function WMSSearchDialog({
           productSize: el.productSize,
           category: el.category,
           sku: el.skuCode,
+          model: el.model,
+          supplier: el.supplier,
+          volumesPerItem: el.volumesPerItem,
           x: el.x,
           y: el.y,
           width: el.width,
@@ -103,6 +109,9 @@ export function WMSSearchDialog({
               address: `${el.name} · ${pos.code}`,
               sku: pos.sku,
               description: pos.description || pos.label,
+              model: pos.model || el.model,
+              supplier: pos.supplier || el.supplier,
+              volumesPerItem: pos.volumesPerItem ?? el.volumesPerItem,
               status: pos.status,
               productSize: pos.productSize || el.productSize,
               category: pos.category || el.category,
@@ -153,7 +162,7 @@ export function WMSSearchDialog({
         // Filtros rápidos
         if (filterType === 'codes' && !item.positionCode) return false;
         if (filterType === 'zones' && item.isPosition) return false;
-        if (filterType === 'products' && !item.sku && !item.description) return false;
+        if (filterType === 'products' && !item.sku && !item.description && !item.model && !item.supplier) return false;
 
         if (!q) return true;
 
@@ -163,9 +172,21 @@ export function WMSSearchDialog({
         const matchAddr = item.address?.toLowerCase().includes(q);
         const matchSku = item.sku?.toLowerCase().includes(q);
         const matchDesc = item.description?.toLowerCase().includes(q);
+        const matchModel = item.model?.toLowerCase().includes(q);
+        const matchSupplier = item.supplier?.toLowerCase().includes(q);
         const matchCat = item.category?.toLowerCase().includes(q);
 
-        return matchCode || matchName || matchArea || matchAddr || matchSku || matchDesc || matchCat;
+        return (
+          matchCode ||
+          matchName ||
+          matchArea ||
+          matchAddr ||
+          matchSku ||
+          matchDesc ||
+          matchModel ||
+          matchSupplier ||
+          matchCat
+        );
       })
       .slice(0, 40);
   }, [allResults, query, filterType]);

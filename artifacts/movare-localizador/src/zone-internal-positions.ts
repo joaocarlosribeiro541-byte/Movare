@@ -23,6 +23,9 @@ export type InternalPosition = {
   // Dados de estoque WMS individuais
   sku?: string;
   description?: string;
+  model?: string;
+  supplier?: string;
+  volumesPerItem?: number;
   quantity?: number;
   unit?: string; // 'UN' | 'CX' | 'PALETE'
   status: PositionStockStatus;

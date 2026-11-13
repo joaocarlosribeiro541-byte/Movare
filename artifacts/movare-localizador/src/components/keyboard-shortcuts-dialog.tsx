@@ -12,7 +12,7 @@ const SHORTCUT_GROUPS = [
     shortcuts: [
       { key: 'V', desc: 'Ativar modo Seleção de zonas e objetos' },
       { key: 'M', desc: 'Ativar modo Mover e redimensionar' },
-      { key: 'H', desc: 'Ativar modo Navegar / Pan pelo mapa' },
+      { key: 'H', desc: 'Ativar Modo Visualização (navegar e consultar resumo dos itens)' },
       { key: 'Ctrl + K', desc: 'Abrir barra de busca Spotlight e comandos' },
       { key: 'Esc', desc: 'Limpar seleção ou fechar painéis/modais' },
     ],
@@ -28,6 +28,7 @@ const SHORTCUT_GROUPS = [
   {
     group: 'Ações de Objeto & Edição',
     shortcuts: [
+      { key: 'Ctrl + S', desc: 'Salvar alterações concluídas na nuvem (Admin)' },
       { key: 'Delete / Backspace', desc: 'Excluir elemento selecionado' },
       { key: 'Ctrl + D', desc: 'Duplicar elemento selecionado' },
       { key: 'Ctrl + E', desc: 'Exportar imagem PNG em alta resolução' },

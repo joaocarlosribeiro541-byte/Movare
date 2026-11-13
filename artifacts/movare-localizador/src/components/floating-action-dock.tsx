@@ -117,10 +117,10 @@ export function FloatingActionDock({
                   ? 'text-slate-400 hover:text-white hover:bg-slate-800/60'
                   : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
               }`}
-              title="Navegar no Mapa (H) — Arraste a planta livremente"
+              title="Modo Visualização (H) — Arraste a planta e toque nos itens para ver resumo sem editar"
             >
               <Eye className="w-4 h-4 shrink-0" />
-              <span className="hidden md:inline">Navegar</span>
+              <span className="hidden md:inline">Visualizar</span>
               <kbd className="hidden lg:inline text-[9px] opacity-60 font-mono">H</kbd>
             </button>
           </div>

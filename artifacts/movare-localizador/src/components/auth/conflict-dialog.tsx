@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { AlertTriangle, RefreshCw, ArrowDownToLine, UploadCloud, Loader2 } from 'lucide-react';
+import { AlertTriangle, RefreshCw, ArrowDownToLine, UploadCloud, Loader2, X } from 'lucide-react';
 import type { MapConflictState } from '../../hooks/use-shared-map';
 
 type ConflictDialogProps = {
@@ -8,6 +8,7 @@ type ConflictDialogProps = {
   onExportLocalDraft: () => void;
   onReloadRemote: () => Promise<void>;
   onPublishLocalDraft: () => Promise<{ ok: boolean; error?: string }>;
+  onDismiss?: () => void;
 };
 
 export function ConflictDialog({
@@ -16,6 +17,7 @@ export function ConflictDialog({
   onExportLocalDraft,
   onReloadRemote,
   onPublishLocalDraft,
+  onDismiss,
 }: ConflictDialogProps) {
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -28,26 +30,46 @@ export function ConflictDialog({
     : null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-md">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-md"
+      onClick={() => {
+        if (!busy) onDismiss?.();
+      }}
+    >
       <div
+        onClick={(e) => e.stopPropagation()}
         className={`w-full max-w-lg rounded-2xl border shadow-2xl overflow-hidden ${
           isDark
             ? 'bg-slate-900 border-amber-500/50 text-slate-100 shadow-black/80'
             : 'bg-white border-amber-400 text-slate-900'
         }`}
       >
-        <div className="px-5 py-4 border-b border-slate-800 bg-amber-500/10 flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-amber-500/20 border border-amber-500/40 text-amber-400 flex items-center justify-center shrink-0">
-            <AlertTriangle className="w-5 h-5" />
+        <div className="px-5 py-4 border-b border-slate-800 bg-amber-500/10 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-10 h-10 rounded-xl bg-amber-500/20 border border-amber-500/40 text-amber-400 flex items-center justify-center shrink-0">
+              <AlertTriangle className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="text-sm sm:text-base font-bold text-amber-300">
+                Nova Versão Encontrada na Nuvem
+              </h3>
+              <p className="text-[11px] text-slate-300">
+                Suas edições locais permanecem preservadas. Escolha como prosseguir.
+              </p>
+            </div>
           </div>
-          <div>
-            <h3 className="text-sm sm:text-base font-bold text-amber-300">
-              Conflito de Edição Simultânea
-            </h3>
-            <p className="text-[11px] text-slate-300">
-              Suas alterações locais não foram sobrescritas nem perdidas.
-            </p>
-          </div>
+
+          {onDismiss && (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={onDismiss}
+              className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 cursor-pointer shrink-0"
+              title="Continuar editando localmente"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          )}
         </div>
 
         <div className="p-5 space-y-4 text-xs">
@@ -90,20 +112,37 @@ export function ConflictDialog({
                 setBusy(true);
                 setActionError(null);
                 try {
-                  await onReloadRemote();
+                  const res = await onPublishLocalDraft();
+                  if (!res.ok) setActionError(res.error || 'Falha ao publicar alterações.');
                 } finally {
                   setBusy(false);
                 }
               }}
               className="w-full py-2.5 px-4 rounded-xl bg-orange-600 hover:bg-orange-500 disabled:opacity-50 text-white font-bold flex items-center justify-center gap-2 cursor-pointer"
             >
-              {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
-              <span>
-                Recarregar Versão Central {remote ? `(v${remote.version})` : ''}
-              </span>
+              {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <UploadCloud className="w-4 h-4" />}
+              <span>Publicar Minhas Alterações na Nuvem</span>
             </button>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <button
+                type="button"
+                disabled={busy}
+                onClick={async () => {
+                  setBusy(true);
+                  setActionError(null);
+                  try {
+                    await onReloadRemote();
+                  } finally {
+                    setBusy(false);
+                  }
+                }}
+                className="py-2 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-sky-300 border border-sky-500/30 font-semibold flex items-center justify-center gap-1.5 cursor-pointer"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                <span>Descartar e Baixar {remote ? `v${remote.version}` : 'Nuvem'}</span>
+              </button>
+
               <button
                 type="button"
                 disabled={busy}
@@ -113,26 +152,18 @@ export function ConflictDialog({
                 <ArrowDownToLine className="w-3.5 h-3.5" />
                 <span>Exportar Rascunho JSON</span>
               </button>
+            </div>
 
+            {onDismiss && (
               <button
                 type="button"
                 disabled={busy}
-                onClick={async () => {
-                  setBusy(true);
-                  setActionError(null);
-                  try {
-                    const res = await onPublishLocalDraft();
-                    if (!res.ok) setActionError(res.error || 'Falha ao publicar rascunho.');
-                  } finally {
-                    setBusy(false);
-                  }
-                }}
-                className="py-2 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-amber-300 border border-amber-500/30 font-semibold flex items-center justify-center gap-1.5 cursor-pointer"
+                onClick={onDismiss}
+                className="w-full py-2 px-3 rounded-xl bg-transparent hover:bg-slate-800/70 text-slate-400 hover:text-slate-200 font-medium cursor-pointer"
               >
-                <UploadCloud className="w-3.5 h-3.5" />
-                <span>Publicar Meu Rascunho</span>
+                Continuar editando localmente sem publicar agora
               </button>
-            </div>
+            )}
           </div>
         </div>
       </div>

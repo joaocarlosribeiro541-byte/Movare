@@ -24,17 +24,20 @@ export const PositionStockStatusSchema = z.enum(['empty', 'occupied', 'reserved'
 
 export const InternalPositionSchema = z.object({
   id: z.string().min(1, 'ID da posição é obrigatório'),
-  code: z.string().min(1, 'Código da posição é obrigatório'),
+  code: z.string().default(''),
   label: z.string().optional(),
-  relX: z.number().finite('relX deve ser um número finito'),
-  relY: z.number().finite('relY deve ser um número finito'),
-  relWidth: z.number().positive('relWidth deve ser positivo'),
-  relHeight: z.number().positive('relHeight deve ser positivo'),
-  widthMeters: z.number().nonnegative('widthMeters não pode ser negativo'),
-  depthMeters: z.number().nonnegative('depthMeters não pode ser negativo'),
+  relX: z.number().finite('relX deve ser um número finito').default(0),
+  relY: z.number().finite('relY deve ser um número finito').default(0),
+  relWidth: z.number().finite().nonnegative('relWidth não pode ser negativo').default(25),
+  relHeight: z.number().finite().nonnegative('relHeight não pode ser negativo').default(25),
+  widthMeters: z.number().finite().nonnegative('widthMeters não pode ser negativo').default(0),
+  depthMeters: z.number().finite().nonnegative('depthMeters não pode ser negativo').default(0),
   sku: z.string().optional(),
   description: z.string().optional(),
-  quantity: z.number().nonnegative().optional(),
+  model: z.string().optional(),
+  supplier: z.string().optional(),
+  volumesPerItem: z.number().finite().nonnegative().optional(),
+  quantity: z.number().finite().nonnegative().optional(),
   unit: z.string().optional(),
   status: PositionStockStatusSchema.default('empty'),
   updatedAt: z.string().optional(),
@@ -42,16 +45,16 @@ export const InternalPositionSchema = z.object({
 });
 
 export const ZoneInternalLayoutSchema = z.object({
-  method: z.enum(['horizontal_rows', 'dimensioned_units', 'grid', 'custom']),
-  rowDepthMeters: z.number().positive().optional(),
-  unitWidthMeters: z.number().positive().optional(),
-  unitDepthMeters: z.number().positive().optional(),
+  method: z.enum(['horizontal_rows', 'dimensioned_units', 'grid', 'custom']).default('grid'),
+  rowDepthMeters: z.number().nonnegative().optional(),
+  unitWidthMeters: z.number().nonnegative().optional(),
+  unitDepthMeters: z.number().nonnegative().optional(),
   clearanceMeters: z.number().nonnegative().optional(),
   marginMeters: z.number().nonnegative().optional(),
   codePrefix: z.string().optional(),
   sameCodePerRow: z.boolean().optional(),
-  columns: z.number().int().positive().optional(),
-  rows: z.number().int().positive().optional(),
+  columns: z.number().int().nonnegative().optional(),
+  rows: z.number().int().nonnegative().optional(),
   notes: z.string().optional(),
 });
 
@@ -67,29 +70,35 @@ export const RackSlotSchema = z.object({
   updatedAt: z.string().optional(),
 });
 
-export const HexColorSchema = z.string().regex(/^#[\da-fA-F]{6}$/, 'Cor deve estar no formato hexadecimal (#RRGGBB)');
+export const HexColorSchema = z.string().regex(
+  /^#([\da-fA-F]{3}|[\da-fA-F]{6}|[\da-fA-F]{8})$/,
+  'Cor deve estar no formato hexadecimal (#RRGGBB)'
+);
 
 export const DrawingElementSchema = z.object({
   id: z.string().min(1, 'ID do elemento é obrigatório'),
   type: z.enum(['rectangle', 'divider', 'rack', 'corridor']),
-  name: z.string().min(1, 'Nome do elemento é obrigatório'),
+  name: z.string(),
   color: HexColorSchema.optional(),
   x: z.number().finite(),
   y: z.number().finite(),
   width: z.number().finite(),
   height: z.number().finite(),
   corridorText: z.string().optional(),
-  fontSize: z.number().positive().optional(),
+  fontSize: z.number().nonnegative().optional(),
   letterSpacing: z.number().optional(),
   fontWeight: z.enum(['normal', 'bold', 'extrabold']).optional(),
   street: z.string().optional(),
-  modules: z.number().int().positive().optional(),
-  levels: z.number().int().positive().optional(),
-  baysPerLevel: z.number().int().positive().optional(),
+  modules: z.number().int().nonnegative().optional(),
+  levels: z.number().int().nonnegative().optional(),
+  baysPerLevel: z.number().int().nonnegative().optional(),
   slots: z.record(z.string(), RackSlotSchema).optional(),
   productSize: z.string().optional() as z.ZodType<ProductSize | undefined>,
   category: z.string().optional(),
   skuCode: z.string().optional(),
+  model: z.string().optional(),
+  supplier: z.string().optional(),
+  volumesPerItem: z.number().finite().nonnegative().optional(),
   capacity: z.number().nonnegative().optional(),
   notes: z.string().optional(),
   rotation: z.number().finite().optional(),

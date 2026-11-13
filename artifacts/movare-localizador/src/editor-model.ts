@@ -82,6 +82,9 @@ export type DrawingElement = {
   productSize?: ProductSize;
   category?: string;
   skuCode?: string;
+  model?: string;
+  supplier?: string;
+  volumesPerItem?: number;
   capacity?: number;
   notes?: string;
   rotation?: number;
@@ -185,10 +188,10 @@ export function validAreas(value: unknown): value is FloorArea[] {
     return area.elements.every((item: DrawingElement) => {
       if (!item || typeof item.id !== 'string' || elementIds.has(item.id)) return false;
       if (!['rectangle', 'divider', 'rack', 'corridor'].includes(item.type)) return false;
-      if (typeof item.name !== 'string' || !item.name.trim()) return false;
+      if (typeof item.name !== 'string') return false;
       elementIds.add(item.id);
 
-      if (item.color !== undefined && (typeof item.color !== 'string' || !/^#[\da-fA-F]{6}$/i.test(item.color))) return false;
+      if (item.color !== undefined && item.color !== '' && (typeof item.color !== 'string' || !/^#([\da-fA-F]{3}|[\da-fA-F]{6}|[\da-fA-F]{8})$/i.test(item.color))) return false;
       if (![item.x, item.y, item.width, item.height].every((n) => typeof n === 'number' && Number.isFinite(n))) return false;
 
       if (item.type === 'rectangle' || item.type === 'rack' || item.type === 'corridor') {

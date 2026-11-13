@@ -329,28 +329,18 @@ export function Minimap({
             );
           })}
 
-          {/* Beacon Pulsante do Item Destacado da Busca */}
+          {/* Indicador vermelho pulsante do Item Destacado da Busca */}
           {highlightedPoint && (
-            <g>
-              <circle
-                cx={highlightedPoint.x * scaleFactor}
-                cy={highlightedPoint.y * scaleFactor}
-                r={6}
-                fill="none"
-                stroke="#f97316"
-                strokeWidth={1.5}
-                opacity="0.8"
-              >
-                <animate attributeName="r" from="2" to="10" dur="1.5s" repeatCount="indefinite" />
-                <animate attributeName="opacity" from="1" to="0" dur="1.5s" repeatCount="indefinite" />
-              </circle>
-              <circle
-                cx={highlightedPoint.x * scaleFactor}
-                cy={highlightedPoint.y * scaleFactor}
-                r={2.5}
-                fill="#ef4444"
-                stroke="#ffffff"
-                strokeWidth={0.8}
+            <g className="movare-search-pulse">
+              <rect
+                x={highlightedPoint.x * scaleFactor - 4}
+                y={highlightedPoint.y * scaleFactor - 4}
+                width={8}
+                height={8}
+                rx={2}
+                fill="rgba(239, 68, 68, 0.25)"
+                stroke="#ef4444"
+                strokeWidth={1.6}
               />
             </g>
           )}

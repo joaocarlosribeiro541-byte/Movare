@@ -25,7 +25,7 @@ type AdminPanelDialogProps = {
   hasUnsavedChanges: boolean;
   onOpenLogin: () => void;
   onLogout: () => Promise<unknown>;
-  onForceSyncNow: () => Promise<void>;
+  onForceSyncNow: () => Promise<unknown>;
   onReloadFromCloud: () => Promise<void>;
   onExportBackup: () => void;
 };
@@ -75,12 +75,14 @@ export function AdminPanelDialog({
   const syncLabel =
     syncStatus === 'saved'
       ? 'Sincronizado com Nuvem'
+      : syncStatus === 'pending'
+      ? 'Alterações locais aguardando envio'
       : syncStatus === 'syncing'
-      ? 'Sincronizando alterações...'
+      ? 'Enviando alterações para a nuvem...'
       : syncStatus === 'loading'
       ? 'Carregando mapa central...'
       : syncStatus === 'conflict'
-      ? 'Conflito de Versão Pendente'
+      ? 'Versão mais nova disponível na nuvem'
       : syncStatus === 'error'
       ? 'Erro na Sincronização'
       : syncStatus === 'unconfigured'
@@ -253,7 +255,7 @@ export function AdminPanelDialog({
               >
                 <RefreshCw className="w-3.5 h-3.5" />
                 <span>
-                  {hasUnsavedChanges ? 'Sincronizar Alterações Pendentes' : 'Forçar Sincronização Agora'}
+                  {hasUnsavedChanges ? 'Salvar Alterações na Nuvem Agora' : 'Publicar Versão Atual na Nuvem'}
                 </span>
               </button>
             )}

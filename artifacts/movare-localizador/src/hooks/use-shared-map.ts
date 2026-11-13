@@ -21,6 +21,7 @@ export type CloudSyncStatus =
   | 'unconfigured'
   | 'loading'
   | 'idle'
+  | 'pending'
   | 'syncing'
   | 'saved'
   | 'error'
@@ -31,6 +32,47 @@ export type MapConflictState = {
   remoteRecord?: SharedMapRecord;
   error: string;
 };
+
+export type RemoteUpdateNotice = {
+  version: number;
+  updated_at: string;
+  updated_by_email: string | null;
+};
+
+export type RealtimeUpdateDecision =
+  | { action: 'ignore_stale' }
+  | { action: 'ignore_self_echo' }
+  | { action: 'defer_remote_notice' }
+  | { action: 'apply_immediately'; editedByOther: boolean };
+
+export function classifyRealtimeUpdate(params: {
+  recordVersion: number;
+  currentVersion: number;
+  recordUpdatedBy: string | null;
+  currentUserId: string | null;
+  isSaving: boolean;
+  hasUnsavedChanges: boolean;
+  isAdmin: boolean;
+}): RealtimeUpdateDecision {
+  if (params.recordVersion <= params.currentVersion) {
+    return { action: 'ignore_stale' };
+  }
+  if (
+    params.isSaving &&
+    params.recordUpdatedBy &&
+    params.currentUserId &&
+    params.recordUpdatedBy === params.currentUserId
+  ) {
+    return { action: 'ignore_self_echo' };
+  }
+  if (params.hasUnsavedChanges && params.isAdmin) {
+    return { action: 'defer_remote_notice' };
+  }
+  return {
+    action: 'apply_immediately',
+    editedByOther: !params.currentUserId || params.recordUpdatedBy !== params.currentUserId,
+  };
+}
 
 type UseSharedMapOptions = {
   isAdmin: boolean;
@@ -77,12 +119,13 @@ export function useSharedMap({
   const [migrationBusy, setMigrationBusy] = useState(false);
 
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+  const [pendingChangesCount, setPendingChangesCount] = useState(0);
+  const [remoteUpdateNotice, setRemoteUpdateNotice] = useState<RemoteUpdateNotice | null>(null);
   const [conflictState, setConflictState] = useState<MapConflictState | null>(null);
 
   const hasUnsavedChangesRef = useRef(false);
+  const isSavingRef = useRef(false);
   const mutationSeqRef = useRef(0);
-  const [saveTick, setSaveTick] = useState(0);
-  const debounceTimerRef = useRef<number | null>(null);
   const prevConnRef = useRef<RealtimeConnectionStatus>(connectionStatus);
   const activeIdRef = useRef(activeId);
   activeIdRef.current = activeId;
@@ -100,8 +143,10 @@ export function useSharedMap({
       setCentralEmpty(false);
       setLocalMigrationCandidate(null);
       setConflictState(null);
+      setRemoteUpdateNotice(null);
       hasUnsavedChangesRef.current = false;
       setHasUnsavedChanges(false);
+      setPendingChangesCount(0);
       setSyncError(null);
       setSyncStatus('saved');
 
@@ -162,6 +207,10 @@ export function useSharedMap({
         setMapVersion(0);
         setLastUpdatedAt(null);
         setLastUpdatedByEmail(null);
+        setRemoteUpdateNotice(null);
+        hasUnsavedChangesRef.current = false;
+        setHasUnsavedChanges(false);
+        setPendingChangesCount(0);
         setSyncError(null);
         setSyncStatus('idle');
 
@@ -214,20 +263,19 @@ export function useSharedMap({
     };
   }, [isAdmin, centralEmpty]);
 
-  // Se o usuário sair do modo admin, cancela imediatamente gravações pendentes
+  // Se o usuário sair do modo admin, limpa estados pendentes de edição
   useEffect(() => {
     if (!isAdmin) {
-      if (debounceTimerRef.current !== null) {
-        window.clearTimeout(debounceTimerRef.current);
-        debounceTimerRef.current = null;
-      }
       hasUnsavedChangesRef.current = false;
       setHasUnsavedChanges(false);
+      setPendingChangesCount(0);
+      setRemoteUpdateNotice(null);
       setConflictState(null);
     }
   }, [isAdmin]);
 
   // 2. Assinatura Supabase Realtime (postgres_changes em public.shared_map)
+  // IMPORTANTE: Nunca interrompe edições em andamento com popups de conflito automático.
   useEffect(() => {
     if (!isSupabaseConfigured) {
       setConnectionStatus('unconfigured');
@@ -245,27 +293,33 @@ export function useSharedMap({
         }
       },
       onRemoteRecord: (record) => {
-        const currentVersion = versionRef.current ?? 0;
-        if (record.version <= currentVersion) {
+        const decision = classifyRealtimeUpdate({
+          recordVersion: record.version,
+          currentVersion: versionRef.current ?? 0,
+          recordUpdatedBy: record.updated_by,
+          currentUserId: userId ?? null,
+          isSaving: isSavingRef.current,
+          hasUnsavedChanges: hasUnsavedChangesRef.current,
+          isAdmin,
+        });
+
+        if (decision.action === 'ignore_stale' || decision.action === 'ignore_self_echo') {
           return;
         }
 
-        if (hasUnsavedChangesRef.current && isAdmin) {
-          setSyncStatus('conflict');
-          setConflictState({
-            localAreas: clone(areasRef.current),
-            remoteRecord: record,
-            error:
-              'Outro administrador publicou uma nova versão do mapa enquanto havia edições locais não sincronizadas.',
+        if (decision.action === 'defer_remote_notice') {
+          setRemoteUpdateNotice({
+            version: record.version,
+            updated_at: record.updated_at,
+            updated_by_email: record.updated_by_email,
           });
           return;
         }
 
-        const editedByOther = !userId || record.updated_by !== userId;
         applyAuthoritativeRemoteRecord(record, {
           resetHistory: true,
-          notifyText: editedByOther
-            ? `Mapa atualizado em tempo real (v${record.version}${
+          notifyText: decision.editedByOther
+            ? `Mapa atualizado na nuvem (v${record.version}${
                 record.updated_by_email ? ` por ${record.updated_by_email}` : ''
               }).`
             : undefined,
@@ -286,86 +340,99 @@ export function useSharedMap({
     };
   }, [applyAuthoritativeRemoteRecord, isAdmin, reloadFromCloud, userId]);
 
-  // 3. Execução da persistência centralizada (Admin apenas)
-  const flushSaveToCloud = useCallback(async () => {
-    if (!isAdmin || !isSupabaseConfigured) return;
-    if (conflictState) return;
+  // 3. Publicação explícita das alterações acumuladas para a nuvem (Admin apenas)
+  const flushSaveToCloud = useCallback(async (): Promise<{ ok: boolean; error?: string }> => {
+    if (!isAdmin) {
+      return { ok: false, error: 'Apenas administradores podem publicar alterações na nuvem.' };
+    }
+    if (!isSupabaseConfigured) {
+      return { ok: false, error: 'Sincronização em nuvem não configurada neste ambiente.' };
+    }
+    if (isSavingRef.current) {
+      return { ok: false, error: 'Envio para a nuvem já está em andamento.' };
+    }
 
     const seqAtStart = mutationSeqRef.current;
     const snapshot = clone(areasRef.current);
 
     const validation = validateCentralMapPayload(snapshot);
     if (!validation.valid) {
+      const errMsg = validation.errors[0] || 'Dados inválidos aguardando correção para sincronizar.';
       setSyncStatus('error');
-      setSyncError(validation.errors[0] || 'Dados inválidos aguardando correção para sincronizar.');
-      return;
+      setSyncError(errMsg);
+      onNotify?.(errMsg);
+      return { ok: false, error: errMsg };
     }
 
+    isSavingRef.current = true;
     setSyncStatus('syncing');
     setSyncError(null);
 
-    const expectedVer = versionRef.current ?? 0;
-    const res = await saveCentralMap(snapshot, expectedVer);
+    try {
+      const expectedVer = versionRef.current ?? 0;
+      const res = await saveCentralMap(snapshot, expectedVer);
 
-    if (res.ok) {
-      versionRef.current = res.record.version;
-      setMapVersion(res.record.version);
-      setLastUpdatedAt(res.record.updated_at);
-      setLastUpdatedByEmail(res.record.updated_by_email);
-      setCentralEmpty(false);
-      setLocalMigrationCandidate(null);
-      void saveAreas(res.record.data);
+      if (res.ok) {
+        versionRef.current = res.record.version;
+        setMapVersion(res.record.version);
+        setLastUpdatedAt(res.record.updated_at);
+        setLastUpdatedByEmail(res.record.updated_by_email);
+        setCentralEmpty(false);
+        setLocalMigrationCandidate(null);
+        setConflictState(null);
+        setRemoteUpdateNotice(null);
+        void saveAreas(res.record.data);
 
-      if (mutationSeqRef.current === seqAtStart) {
-        hasUnsavedChangesRef.current = false;
-        setHasUnsavedChanges(false);
-        setSyncStatus('saved');
-        setSyncError(null);
-      } else {
-        // Novas alterações ocorreram enquanto a requisição estava em voo
-        setSaveTick((t) => t + 1);
+        if (mutationSeqRef.current === seqAtStart) {
+          hasUnsavedChangesRef.current = false;
+          setHasUnsavedChanges(false);
+          setPendingChangesCount(0);
+          setSyncStatus('saved');
+          setSyncError(null);
+          onNotify?.(`Alterações publicadas na nuvem (v${res.record.version})!`);
+        } else {
+          // Ocorreram novas edições enquanto o envio estava em voo; mantém lembrete pendente
+          hasUnsavedChangesRef.current = true;
+          setHasUnsavedChanges(true);
+          setSyncStatus('pending');
+          onNotify?.('Versão anterior enviada, mas há novas edições locais pendentes.');
+        }
+        return { ok: true };
       }
-      return;
-    }
 
-    if (res.reason === 'conflict') {
-      setSyncStatus('conflict');
+      if (res.reason === 'conflict') {
+        setSyncStatus('conflict');
+        setSyncError(res.error);
+        setConflictState({
+          localAreas: snapshot,
+          remoteRecord: res.remoteRecord,
+          error: res.error,
+        });
+        return { ok: false, error: res.error };
+      }
+
+      setSyncStatus('error');
       setSyncError(res.error);
-      setConflictState({
-        localAreas: snapshot,
-        remoteRecord: res.remoteRecord,
-        error: res.error,
-      });
-      return;
+      onNotify?.(res.error);
+      return { ok: false, error: res.error };
+    } finally {
+      isSavingRef.current = false;
     }
+  }, [isAdmin, onNotify]);
 
-    setSyncStatus('error');
-    setSyncError(res.error);
-    onNotify?.(res.error);
-  }, [conflictState, isAdmin, onNotify]);
-
-  // Debounce automático exclusivo para alterações de administradores autenticados
-  useEffect(() => {
-    if (!isAdmin || !isSupabaseConfigured || saveTick === 0 || conflictState) return;
-
-    if (debounceTimerRef.current !== null) {
-      window.clearTimeout(debounceTimerRef.current);
+  // 4. Mutadores protegidos de estado (mantém rascunho local fluido e marca lembrete de envio pendente)
+  const markLocalEditPending = useCallback((next: FloorArea[]) => {
+    void saveAreas(next);
+    if (isSupabaseConfigured) {
+      hasUnsavedChangesRef.current = true;
+      setHasUnsavedChanges(true);
+      setPendingChangesCount((count) => count + 1);
+      mutationSeqRef.current += 1;
+      setSyncError(null);
+      setSyncStatus('pending');
     }
+  }, []);
 
-    debounceTimerRef.current = window.setTimeout(() => {
-      debounceTimerRef.current = null;
-      void flushSaveToCloud();
-    }, 650);
-
-    return () => {
-      if (debounceTimerRef.current !== null) {
-        window.clearTimeout(debounceTimerRef.current);
-        debounceTimerRef.current = null;
-      }
-    };
-  }, [conflictState, flushSaveToCloud, isAdmin, saveTick]);
-
-  // 4. Mutadores protegidos de estado
   const recordAreas = useCallback(
     (next: FloorArea[]): boolean => {
       if (!isAdmin) {
@@ -381,18 +448,10 @@ export function useSharedMap({
       areasRef.current = next;
       setAreas(next);
 
-      if (isSupabaseConfigured) {
-        hasUnsavedChangesRef.current = true;
-        setHasUnsavedChanges(true);
-        mutationSeqRef.current += 1;
-        setSyncStatus('syncing');
-        setSaveTick((t) => t + 1);
-      } else {
-        void saveAreas(next);
-      }
+      markLocalEditPending(next);
       return true;
     },
-    [isAdmin, onNotify]
+    [isAdmin, markLocalEditPending, onNotify]
   );
 
   const patchActive = useCallback(
@@ -418,17 +477,9 @@ export function useSharedMap({
     areasRef.current = previous;
     setAreas(previous);
 
-    if (isSupabaseConfigured) {
-      hasUnsavedChangesRef.current = true;
-      setHasUnsavedChanges(true);
-      mutationSeqRef.current += 1;
-      setSyncStatus('syncing');
-      setSaveTick((t) => t + 1);
-    } else {
-      void saveAreas(previous);
-    }
+    markLocalEditPending(previous);
     return true;
-  }, [isAdmin, onNotify]);
+  }, [isAdmin, markLocalEditPending, onNotify]);
 
   const redo = useCallback((): boolean => {
     if (!isAdmin) {
@@ -444,17 +495,9 @@ export function useSharedMap({
     areasRef.current = next;
     setAreas(next);
 
-    if (isSupabaseConfigured) {
-      hasUnsavedChangesRef.current = true;
-      setHasUnsavedChanges(true);
-      mutationSeqRef.current += 1;
-      setSyncStatus('syncing');
-      setSaveTick((t) => t + 1);
-    } else {
-      void saveAreas(next);
-    }
+    markLocalEditPending(next);
     return true;
-  }, [isAdmin, onNotify]);
+  }, [isAdmin, markLocalEditPending, onNotify]);
 
   // 5. Ações de Migração Inicial Local -> Nuvem (Admin apenas)
   const migrateLocalCandidateToCloud = useCallback(async () => {
@@ -506,7 +549,16 @@ export function useSharedMap({
     }
   }, [applyAuthoritativeRemoteRecord, isAdmin]);
 
-  // 6. Resolução de Conflitos
+  // 6. Resolução e dispensa de conflitos (apenas sob ação explícita do administrador)
+  const dismissConflict = useCallback(() => {
+    setConflictState(null);
+    if (hasUnsavedChangesRef.current) {
+      setSyncStatus('pending');
+    } else {
+      setSyncStatus(isSupabaseConfigured ? 'saved' : 'unconfigured');
+    }
+  }, []);
+
   const resolveConflictReloadRemote = useCallback(async () => {
     if (conflictState?.remoteRecord) {
       applyAuthoritativeRemoteRecord(conflictState.remoteRecord, {
@@ -518,6 +570,7 @@ export function useSharedMap({
     setConflictState(null);
     hasUnsavedChangesRef.current = false;
     setHasUnsavedChanges(false);
+    setPendingChangesCount(0);
     await reloadFromCloud();
   }, [applyAuthoritativeRemoteRecord, conflictState, reloadFromCloud]);
 
@@ -529,7 +582,7 @@ export function useSharedMap({
     if (res.ok) {
       applyAuthoritativeRemoteRecord(res.record, {
         resetHistory: false,
-        notifyText: `Rascunho publicado como nova versão central v${res.record.version}.`,
+        notifyText: `Alterações publicadas como nova versão central v${res.record.version}.`,
       });
       return { ok: true };
     }
@@ -569,6 +622,8 @@ export function useSharedMap({
     lastUpdatedByEmail,
     centralEmpty,
     hasUnsavedChanges,
+    pendingChangesCount,
+    remoteUpdateNotice,
     reloadFromCloud,
     flushSaveToCloud,
     shouldShowMigrationPrompt,
@@ -578,6 +633,7 @@ export function useSharedMap({
     initializeCleanCentralMap,
     dismissMigrationPrompt: () => setMigrationDismissed(true),
     conflictState,
+    dismissConflict,
     resolveConflictReloadRemote,
     resolveConflictPublishLocalDraft,
   };

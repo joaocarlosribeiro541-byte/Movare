@@ -53,6 +53,22 @@ export function sanitizeAreasForRender(areas: FloorArea[]): FloorArea[] {
   }));
 }
 
+function stripNullObjectFields<T>(input: T): T {
+  if (Array.isArray(input)) {
+    return input.map((item) => stripNullObjectFields(item)) as unknown as T;
+  }
+  if (input && typeof input === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(input as Record<string, unknown>)) {
+      if (v === null || v === undefined) continue;
+      if (k === 'color' && v === '') continue;
+      out[k] = stripNullObjectFields(v);
+    }
+    return out as T;
+  }
+  return input;
+}
+
 /**
  * Validação rigorosa antes de persistir no PostgreSQL central.
  * Preserva integralmente áreas, dimensões, escalas, elementos, produtos, SKUs e posições internas.
@@ -66,7 +82,24 @@ export function validateCentralMapPayload(raw: unknown): {
     return { valid: false, errors: ['O mapa precisa conter ao menos uma área válida.'] };
   }
 
-  const schemaParsed = AreasArraySchema.safeParse(raw);
+  const normalized = stripNullObjectFields(raw).map((area: any) => {
+    if (!area || typeof area !== 'object' || !Array.isArray(area.elements)) return area;
+    return {
+      ...area,
+      elements: area.elements.map((el: any) => {
+        if (!el || typeof el !== 'object') return el;
+        if (Array.isArray(el.internalPositions) && el.internalPositions.length > 0) {
+          return {
+            ...el,
+            internalPositions: sanitizeZonePositions(typeof el.id === 'string' ? el.id : 'zone', el.internalPositions),
+          };
+        }
+        return el;
+      }),
+    };
+  });
+
+  const schemaParsed = AreasArraySchema.safeParse(normalized);
   if (!schemaParsed.success) {
     const issueMessages = schemaParsed.error.issues
       .slice(0, 4)
@@ -74,7 +107,7 @@ export function validateCentralMapPayload(raw: unknown): {
     return { valid: false, errors: issueMessages };
   }
 
-  const areas = raw as FloorArea[];
+  const areas = normalized as FloorArea[];
   if (!validAreas(areas)) {
     return { valid: false, errors: ['Estrutura de áreas ou coordenadas inválida para gravação.'] };
   }

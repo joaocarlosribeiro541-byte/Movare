@@ -4,7 +4,8 @@ import {
   ArrowDownToLine, ArrowUpFromLine, CircleHelp, Sun, Moon,
   Plus, ChevronDown, Maximize2, RotateCcw, Redo2,
   SlidersHorizontal, PanelRightOpen, PanelRightClose, Camera, Crosshair,
-  Eye, LogIn, Cloud, CloudOff, AlertTriangle
+  Eye, LogIn, Cloud, CloudOff, AlertTriangle, Pencil,
+  UploadCloud, Loader2
 } from 'lucide-react';
 import type { FloorArea } from '../editor-model';
 import type { EditorTool } from './floating-action-dock';
@@ -16,6 +17,7 @@ type TopCommandBarProps = {
   activeAreaId: string;
   onSelectArea: (id: string) => void;
   onCreateNewArea: () => void;
+  onOpenWarehouseManager?: () => void;
   bounds: { widthMeters: number; heightMeters: number };
   onOpenResizeDialog: () => void;
   tool: EditorTool;
@@ -49,6 +51,8 @@ type TopCommandBarProps = {
   connectionStatus?: RealtimeConnectionStatus;
   syncStatus?: CloudSyncStatus;
   mapVersion?: number | null;
+  hasUnsavedChanges?: boolean;
+  onSaveToCloud?: () => void;
   onOpenAccessPanel?: () => void;
   onOpenLogin?: () => void;
 };
@@ -58,6 +62,7 @@ export function TopCommandBar({
   activeAreaId,
   onSelectArea,
   onCreateNewArea,
+  onOpenWarehouseManager,
   bounds,
   onOpenResizeDialog,
   tool,
@@ -91,6 +96,8 @@ export function TopCommandBar({
   connectionStatus = 'unconfigured',
   syncStatus = 'idle',
   mapVersion = null,
+  hasUnsavedChanges = false,
+  onSaveToCloud,
   onOpenAccessPanel,
   onOpenLogin,
 }: TopCommandBarProps) {
@@ -135,14 +142,28 @@ export function TopCommandBar({
           <ChevronDown className="w-3.5 h-3.5 text-slate-400 -ml-3.5 pointer-events-none shrink-0" />
 
           {isAdmin && (
-            <button
-              type="button"
-              onClick={onCreateNewArea}
-              title="Novo Galpão"
-              className="p-0.5 ml-1 text-slate-400 hover:text-orange-500 transition-colors shrink-0 cursor-pointer"
-            >
-              <Plus className="w-3.5 h-3.5" />
-            </button>
+            <>
+              <button
+                type="button"
+                onClick={onCreateNewArea}
+                title="Criar novo galpão / barracão"
+                aria-label="Criar novo galpão"
+                className="p-0.5 ml-1 text-slate-400 hover:text-orange-500 transition-colors shrink-0 cursor-pointer"
+              >
+                <Plus className="w-3.5 h-3.5" />
+              </button>
+              {onOpenWarehouseManager && (
+                <button
+                  type="button"
+                  onClick={onOpenWarehouseManager}
+                  title="Gerenciar, editar ou excluir galpões e barracões"
+                  aria-label="Gerenciar galpões"
+                  className="p-0.5 ml-0.5 text-slate-400 hover:text-orange-500 transition-colors shrink-0 cursor-pointer"
+                >
+                  <Pencil className="w-3 h-3" />
+                </button>
+              )}
+            </>
           )}
         </div>
 
@@ -189,23 +210,21 @@ export function TopCommandBar({
             <span>Selecionar</span>
           </button>
 
-          {!isAdmin && (
-            <button
-              type="button"
-              onClick={() => onSelectTool('pan')}
-              className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
-                tool === 'pan'
-                  ? 'bg-orange-500 text-white shadow-xs'
-                  : isDark
-                  ? 'text-slate-400 hover:text-white hover:bg-slate-800/60'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-white'
-              }`}
-              title="Navegar no Mapa (H)"
-            >
-              <Eye className="w-3.5 h-3.5" />
-              <span>Navegar</span>
-            </button>
-          )}
+          <button
+            type="button"
+            onClick={() => onSelectTool('pan')}
+            className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+              tool === 'pan'
+                ? 'bg-orange-500 text-white shadow-xs'
+                : isDark
+                ? 'text-slate-400 hover:text-white hover:bg-slate-800/60'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-white'
+            }`}
+            title="Modo Visualização (H) — Consultar mapa e resumo dos itens sem editar"
+          >
+            <Eye className="w-3.5 h-3.5" />
+            <span>Visualizar</span>
+          </button>
 
           {isAdmin && (
             <>
@@ -474,6 +493,27 @@ export function TopCommandBar({
           )}
         </div>
 
+        {/* Botão explícito de Salvar Alterações na Nuvem (Admin com edições pendentes) */}
+        {isAdmin && onSaveToCloud && hasUnsavedChanges && (
+          <button
+            type="button"
+            disabled={syncStatus === 'syncing'}
+            onClick={onSaveToCloud}
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-amber-500 hover:bg-amber-400 disabled:opacity-60 text-slate-950 font-bold text-[11px] shadow-md shadow-amber-500/25 transition-all cursor-pointer shrink-0"
+            title="Publicar alterações locais na nuvem (Ctrl+S)"
+          >
+            {syncStatus === 'syncing' ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
+            ) : (
+              <UploadCloud className="w-3.5 h-3.5 shrink-0" />
+            )}
+            <span className="hidden sm:inline">
+              {syncStatus === 'syncing' ? 'Salvando...' : 'Salvar na Nuvem'}
+            </span>
+            <span className="sm:hidden">Salvar</span>
+          </button>
+        )}
+
         {/* Status de Acesso & Sincronização Nuvem */}
         {onOpenAccessPanel && (
           <button
@@ -482,6 +522,10 @@ export function TopCommandBar({
             className={`flex items-center gap-1.5 px-2 py-1 rounded-xl border text-[11px] font-semibold transition-all cursor-pointer ${
               syncStatus === 'conflict' || syncStatus === 'error'
                 ? 'bg-rose-500/15 border-rose-500/40 text-rose-300'
+                : hasUnsavedChanges && isAdmin
+                ? isDark
+                  ? 'bg-amber-500/15 border-amber-500/40 text-amber-300 hover:bg-amber-500/25'
+                  : 'bg-amber-50 border-amber-300 text-amber-700 hover:bg-amber-100'
                 : isAdmin
                 ? isDark
                   ? 'bg-emerald-500/15 border-emerald-500/35 text-emerald-300 hover:bg-emerald-500/25'
@@ -492,7 +536,9 @@ export function TopCommandBar({
             }`}
             title={
               isAdmin
-                ? `Administrador conectado (${userEmail || 'admin'}) · Versão v${mapVersion ?? 0}`
+                ? hasUnsavedChanges
+                  ? 'Alterações locais aguardando envio para a nuvem'
+                  : `Administrador conectado (${userEmail || 'admin'}) · Versão v${mapVersion ?? 0}`
                 : 'Modo Visitante (somente leitura) · Clique para detalhes de sincronização ou login'
             }
           >
@@ -506,9 +552,11 @@ export function TopCommandBar({
             <span className="hidden sm:inline">
               {isAdmin ? 'Admin' : 'Visitante'}
             </span>
-            {syncStatus === 'syncing' && (
+            {syncStatus === 'syncing' ? (
               <span className="w-2 h-2 rounded-full bg-orange-400 animate-pulse shrink-0" />
-            )}
+            ) : hasUnsavedChanges && isAdmin ? (
+              <span className="w-2 h-2 rounded-full bg-amber-400 shrink-0" />
+            ) : null}
           </button>
         )}
 

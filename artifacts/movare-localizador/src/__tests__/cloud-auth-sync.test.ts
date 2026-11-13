@@ -20,6 +20,12 @@ import {
   summarizeAreasForMigration,
 } from '../local-store';
 import { initialAreas, type FloorArea } from '../editor-model';
+import {
+  buildNewWarehouse,
+  updateWarehouseArea,
+  deleteWarehouseArea,
+} from '../warehouse-crud';
+import { classifyRealtimeUpdate } from '../hooks/use-shared-map';
 
 function createRichSampleAreas(): FloorArea[] {
   return [
@@ -403,5 +409,165 @@ describe('MOVARE NUVEM — AUTENTICAÇÃO, PERMISSÕES E SINCRONIZAÇÃO', () =>
       totalPositions: 2,
       occupiedPositions: 1,
     });
+  });
+
+  it('9. Deve validar zonas horizontal_rows (ex: flat_pack_furniture com unitWidthMeters: 0) e campos opcionais nulos', () => {
+    const mapWithFlatPack = createRichSampleAreas();
+    mapWithFlatPack[0].elements[0].productSize = 'flat_pack_furniture';
+    mapWithFlatPack[0].elements[0].category = 'flat_pack_furniture';
+    mapWithFlatPack[0].elements[0].internalLayout = {
+      method: 'horizontal_rows',
+      rowDepthMeters: 0.8,
+      unitWidthMeters: 0,
+      unitDepthMeters: 0.8,
+      clearanceMeters: 0,
+      marginMeters: 0.1,
+      codePrefix: 'MOV',
+      sameCodePerRow: false,
+      notes: null as unknown as string,
+    };
+
+    const result = validateCentralMapPayload(mapWithFlatPack);
+    expect(result.valid).toBe(true);
+    expect(result.areas?.[0].elements[0].internalLayout?.unitWidthMeters).toBe(0);
+    expect(result.areas?.[0].elements[0].internalLayout?.notes).toBeUndefined();
+  });
+
+  it('10. Deve aceitar células com código em branco (ex: célula limpa pelo operador) sem bloquear publicação', () => {
+    const mapWithBlankCode = createRichSampleAreas();
+    mapWithBlankCode[0].elements[0].internalPositions![1].code = '';
+    mapWithBlankCode[0].elements[1].color = '#fff';
+
+    const result = validateCentralMapPayload(mapWithBlankCode);
+    expect(result.valid).toBe(true);
+    expect(result.areas?.[0].elements[0].internalPositions?.[1].code).toBe('');
+  });
+
+  it('11. Deve criar, editar (nome, dimensões e escala) e excluir galpões preservando ao menos 1 galpão válido', () => {
+    const baseAreas = createRichSampleAreas();
+
+    // 1. Criar novo barracão personalizado
+    const created = buildNewWarehouse(baseAreas, {
+      name: 'Barracão Sul — Expedição',
+      widthMeters: 120,
+      heightMeters: 70,
+      scaleRatio: 20,
+    });
+    const afterCreate = [...baseAreas, created];
+    expect(afterCreate).toHaveLength(2);
+    expect(created.widthMeters).toBe(120);
+    expect(created.heightMeters).toBe(70);
+    expect(created.scaleRatio).toBe(20);
+    expect(validateCentralMapPayload(afterCreate).valid).toBe(true);
+
+    // 2. Editar galpão existente reduzindo dimensões e preservando posições internas
+    const edited = updateWarehouseArea(baseAreas[0], {
+      name: 'CD Central — Matriz',
+      widthMeters: 45,
+      heightMeters: 30,
+      scaleRatio: 25,
+      scaleElements: true,
+    });
+    expect(edited.name).toBe('CD Central — Matriz');
+    expect(edited.widthMeters).toBe(45);
+    expect(edited.heightMeters).toBe(30);
+    expect(edited.elements[0].internalPositions?.[0].code).toBe('0058');
+
+    const afterEdit = [edited, created];
+    expect(validateCentralMapPayload(afterEdit).valid).toBe(true);
+
+    // 3. Excluir galpão ativo redireciona para o próximo disponível
+    const deleted = deleteWarehouseArea(afterEdit, edited.id, edited.id);
+    expect(deleted).not.toBeNull();
+    expect(deleted?.areas).toHaveLength(1);
+    expect(deleted?.nextActiveId).toBe(created.id);
+    expect(validateCentralMapPayload(deleted!.areas).valid).toBe(true);
+
+    // 4. Impedir exclusão do último galpão restante
+    const blocked = deleteWarehouseArea(deleted!.areas, created.id, created.id);
+    expect(blocked).toBeNull();
+  });
+
+  it('12. Deve validar e preservar modelo, fornecedor e volumes por item em zonas e posições internas', () => {
+    const areasWithProductMeta = createRichSampleAreas();
+    areasWithProductMeta[0].elements[0].model = 'Frost Free Duplex 450L';
+    areasWithProductMeta[0].elements[0].supplier = 'Brastemp Industrial';
+    areasWithProductMeta[0].elements[0].volumesPerItem = 2;
+    areasWithProductMeta[0].elements[0].internalPositions![0].model = 'BRM56AK Inverse';
+    areasWithProductMeta[0].elements[0].internalPositions![0].supplier = 'Whirlpool S.A.';
+    areasWithProductMeta[0].elements[0].internalPositions![0].volumesPerItem = 3;
+
+    const validation = validateCentralMapPayload(areasWithProductMeta);
+    expect(validation.valid).toBe(true);
+    expect(validation.areas?.[0].elements[0].model).toBe('Frost Free Duplex 450L');
+    expect(validation.areas?.[0].elements[0].supplier).toBe('Brastemp Industrial');
+    expect(validation.areas?.[0].elements[0].volumesPerItem).toBe(2);
+    expect(validation.areas?.[0].elements[0].internalPositions?.[0].model).toBe('BRM56AK Inverse');
+    expect(validation.areas?.[0].elements[0].internalPositions?.[0].supplier).toBe('Whirlpool S.A.');
+    expect(validation.areas?.[0].elements[0].internalPositions?.[0].volumesPerItem).toBe(3);
+
+    const parsed = parseRemoteSharedMapRecord({
+      id: CENTRAL_MAP_ID,
+      data: areasWithProductMeta,
+      version: 12,
+      updated_at: '2026-11-13T15:00:00.000Z',
+      updated_by: 'admin-1',
+      updated_by_email: 'admin@movare.com',
+    });
+    expect(parsed?.data[0].elements[0].internalPositions?.[0].volumesPerItem).toBe(3);
+  });
+
+  it('13. Deve classificar atualizações Realtime sem interromper edições locais pendentes nem gerar auto-conflito', () => {
+    // Versão antiga ou igual é ignorada
+    expect(
+      classifyRealtimeUpdate({
+        recordVersion: 4,
+        currentVersion: 4,
+        recordUpdatedBy: 'admin-2',
+        currentUserId: 'admin-1',
+        isSaving: false,
+        hasUnsavedChanges: true,
+        isAdmin: true,
+      })
+    ).toEqual({ action: 'ignore_stale' });
+
+    // Eco do próprio salvamento em voo é ignorado silenciosamente
+    expect(
+      classifyRealtimeUpdate({
+        recordVersion: 5,
+        currentVersion: 4,
+        recordUpdatedBy: 'admin-1',
+        currentUserId: 'admin-1',
+        isSaving: true,
+        hasUnsavedChanges: true,
+        isAdmin: true,
+      })
+    ).toEqual({ action: 'ignore_self_echo' });
+
+    // Se admin tem edições locais pendentes, não interrompe: apenas sinaliza aviso discreto
+    expect(
+      classifyRealtimeUpdate({
+        recordVersion: 5,
+        currentVersion: 4,
+        recordUpdatedBy: 'admin-2',
+        currentUserId: 'admin-1',
+        isSaving: false,
+        hasUnsavedChanges: true,
+        isAdmin: true,
+      })
+    ).toEqual({ action: 'defer_remote_notice' });
+
+    // Sem edições locais pendentes (visitante ou admin ocioso), aplica imediatamente
+    expect(
+      classifyRealtimeUpdate({
+        recordVersion: 5,
+        currentVersion: 4,
+        recordUpdatedBy: 'admin-2',
+        currentUserId: 'admin-1',
+        isSaving: false,
+        hasUnsavedChanges: false,
+        isAdmin: true,
+      })
+    ).toEqual({ action: 'apply_immediately', editedByOther: true });
   });
 });

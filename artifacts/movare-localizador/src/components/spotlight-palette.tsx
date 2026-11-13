@@ -12,6 +12,7 @@ import type { PositionStockStatus } from '../zone-internal-positions';
 
 export type SpotlightCommandAction =
   | 'new_warehouse'
+  | 'manage_warehouses'
   | 'resize_warehouse'
   | 'export_backup'
   | 'import_backup'
@@ -44,7 +45,10 @@ export type SpotlightItem = {
   width?: number;
   height?: number;
   positionCode?: string;
+  positionId?: string;
   sku?: string;
+  model?: string;
+  supplier?: string;
   actionId?: SpotlightCommandAction;
 };
 
@@ -55,12 +59,21 @@ type SpotlightPaletteProps = {
   activeAreaId: string;
   isDark: boolean;
   isAdmin?: boolean;
-  onNavigateToPosition: (areaId: string, elementId: string, x: number, y: number, name: string, code?: string) => void;
+  onNavigateToPosition: (
+    areaId: string,
+    elementId: string,
+    x: number,
+    y: number,
+    name: string,
+    code?: string,
+    positionId?: string
+  ) => void;
   onExecuteAction: (action: SpotlightCommandAction) => void;
 };
 
 const ADMIN_ONLY_ACTIONS = new Set<SpotlightCommandAction>([
   'new_warehouse',
+  'manage_warehouses',
   'resize_warehouse',
   'import_backup',
   'open_calibration',
@@ -78,10 +91,17 @@ const SYSTEM_ACTIONS: Array<{
 }> = [
   {
     actionId: 'new_warehouse',
-    title: 'Adicionar Novo Galpão',
-    subtitle: 'Criar uma nova área de armazenamento no projeto',
+    title: 'Adicionar Novo Galpão / Barracão',
+    subtitle: 'Criar uma nova área de armazenamento configurável no projeto',
     badge: 'Galpão',
-    keywords: 'novo galpao adicionar criar planta area armazem',
+    keywords: 'novo galpao barracao adicionar criar planta area armazem',
+  },
+  {
+    actionId: 'manage_warehouses',
+    title: 'Gerenciar Galpões / Barracões',
+    subtitle: 'Criar, editar nome/dimensões ou excluir galpões do mapa central',
+    badge: 'Galpão',
+    keywords: 'gerenciar galpoes barracao editar renomear excluir apagar remover armazem',
   },
   {
     actionId: 'resize_warehouse',
@@ -244,6 +264,8 @@ export function SpotlightPalette({
           width: el.width,
           height: el.height,
           sku: el.skuCode,
+          model: el.model,
+          supplier: el.supplier,
           positionCode: el.skuCode || el.name,
         });
 
@@ -277,7 +299,10 @@ export function SpotlightPalette({
               width: relWidth,
               height: relHeight,
               positionCode: posCode,
+              positionId: pos.id,
               sku: skuText,
+              model: pos.model || el.model,
+              supplier: pos.supplier || el.supplier,
             });
           }
         }
@@ -321,13 +346,15 @@ export function SpotlightPalette({
       const matchBadge = item.badge?.toLowerCase().includes(q);
       const matchSku = item.sku?.toLowerCase().includes(q);
       const matchCode = item.positionCode?.toLowerCase().includes(q);
+      const matchModel = item.model?.toLowerCase().includes(q);
+      const matchSupplier = item.supplier?.toLowerCase().includes(q);
 
       if (item.kind === 'action' && item.actionId) {
         const actDef = SYSTEM_ACTIONS.find((a) => a.actionId === item.actionId);
         if (actDef?.keywords.toLowerCase().includes(q)) return true;
       }
 
-      return matchTitle || matchSubtitle || matchBadge || matchSku || matchCode;
+      return matchTitle || matchSubtitle || matchBadge || matchSku || matchCode || matchModel || matchSupplier;
     });
   }, [items, query, filterTab]);
 
@@ -353,7 +380,15 @@ export function SpotlightPalette({
       onExecuteAction(item.actionId);
       onClose();
     } else if ((item.kind === 'zone' || item.kind === 'position') && item.areaId && item.elementId && item.x !== undefined && item.y !== undefined) {
-      onNavigateToPosition(item.areaId, item.elementId, item.x, item.y, item.title, item.positionCode);
+      onNavigateToPosition(
+        item.areaId,
+        item.elementId,
+        item.x,
+        item.y,
+        item.title,
+        item.positionCode,
+        item.positionId
+      );
       onClose();
     }
   };

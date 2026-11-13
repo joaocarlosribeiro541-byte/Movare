@@ -8,7 +8,7 @@ import {
   Maximize2, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Tag, Target,
   Magnet, Sliders, PanelRightClose, PanelRightOpen, Shield, ShieldCheck,
   CheckSquare, Square,  AlignLeft, AlignCenter, Users, Eye,
-  Camera as CameraIcon, Cloud, CloudOff, LogIn
+  Camera as CameraIcon, Cloud, CloudOff, LogIn, UploadCloud, Loader2
 } from 'lucide-react';
 import {
   initialAreas, parseBackup, createId, DEFAULT_SCALE_RATIO, DEFAULT_WIDTH_METERS, DEFAULT_HEIGHT_METERS,
@@ -43,6 +43,14 @@ import { FloatingActionDock } from '../components/floating-action-dock';
 import { TopCommandBar } from '../components/top-command-bar';
 import { KeyboardShortcutsDialog } from '../components/keyboard-shortcuts-dialog';
 import { PngExportDialog } from '../components/png-export-dialog';
+import { ProductQuickCard } from '../components/product-quick-card';
+import { SelectionInspector } from '../components/selection-inspector';
+import { WarehouseManagerDialog, type WarehouseManagerMode } from '../components/warehouse-manager-dialog';
+import {
+  buildNewWarehouse,
+  updateWarehouseArea,
+  deleteWarehouseArea,
+} from '../warehouse-crud';
 import {
   WarehouseGeographicLegendSVG,
   FloatingGeographicLegendButton,
@@ -62,6 +70,7 @@ type Gesture =
   | { kind: 'empty_pan_or_deselect'; pointerId: number; startScreen: Point; camera: Camera }
   | { kind: 'pending_select_or_move'; pointerId: number; startScreen: Point; startWorld: Point; item: DrawingElement }
   | { kind: 'pending_select'; pointerId: number; startScreen: Point; camera: Camera; item: DrawingElement }
+  | { kind: 'pending_view_select'; pointerId: number; startScreen: Point; camera: Camera; item: DrawingElement }
   | { kind: 'move'; pointerId: number; startWorld: Point; item: DrawingElement }
   | { kind: 'move_group'; pointerId: number; startWorld: Point; items: DrawingElement[] }
   | { kind: 'marquee'; pointerId: number; startWorld: Point; currentWorld: Point }
@@ -286,8 +295,10 @@ export default function Editor() {
   const [modal, setModal] = useState<
     'delete' | 'rename' | 'new-area' | 'import' | 'grid' |
     'search' | 'scale' | 'warehouse-size' | 'layers' | 'spotlight' | 'shortcuts' | 'rack-gen' | 'png-export' |
-    'auth' | 'access-panel' | null
+    'auth' | 'access-panel' | 'warehouses' | null
   >(null);
+  const [warehouseManagerMode, setWarehouseManagerMode] = useState<WarehouseManagerMode>('list');
+  const [warehouseManagerEditId, setWarehouseManagerEditId] = useState<string | null>(null);
 
   // Modo de Edição Individual de Espaço (Sub-Mapa / Foco Isolado)
   const [isolatedSpaceId, setIsolatedSpaceId] = useState<string | null>(null);
@@ -325,7 +336,8 @@ export default function Editor() {
         current === 'import' ||
         current === 'scale' ||
         current === 'warehouse-size' ||
-        current === 'rack-gen'
+        current === 'rack-gen' ||
+        current === 'warehouses'
           ? null
           : current
       );
@@ -422,6 +434,9 @@ export default function Editor() {
         setToast('Modo Visitante: ferramentas de edição restritas a administradores.');
         return;
       }
+      if (nextTool !== 'pan') {
+        setHighlightId(null);
+      }
       setTool(nextTool);
       setMeasureLine(null);
     },
@@ -454,6 +469,13 @@ export default function Editor() {
         if (!isAdmin) return;
         if (e.shiftKey) redo();
         else undo();
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        if (isAdmin && auth.isConfigured) {
+          void sharedMap.flushSaveToCloud();
+        }
         return;
       }
 
@@ -515,7 +537,18 @@ export default function Editor() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isAdmin, redo, selected, undo]);
+  }, [auth.isConfigured, isAdmin, redo, selected, sharedMap, undo]);
+
+  // Alerta ao tentar fechar a aba com edições locais pendentes de envio para a nuvem
+  useEffect(() => {
+    if (!isAdmin || !auth.isConfigured || !sharedMap.hasUnsavedChanges) return;
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [auth.isConfigured, isAdmin, sharedMap.hasUnsavedChanges]);
 
   function pointToWorld(clientX: number, clientY: number): Point {
     const rect = canvasRef.current?.getBoundingClientRect();
@@ -759,14 +792,25 @@ export default function Editor() {
       }
     }
 
-    // 1. Se estiver na ferramenta 'pan' (Mão), toca para navegar independentemente de tocar em elementos
+    // 1. Modo Visualização ('pan'): permite arrastar o mapa livremente OU tocar em um item/célula para ver o resumo simplificado
     if (tool === 'pan') {
-      gestureRef.current = { kind: 'pan', pointerId: event.pointerId, startScreen: screen, camera: cameraRef.current };
+      if (item) {
+        gestureRef.current = {
+          kind: 'pending_view_select',
+          pointerId: event.pointerId,
+          startScreen: screen,
+          camera: cameraRef.current,
+          item: clone(item),
+        };
+        return;
+      }
+      gestureRef.current = { kind: 'empty_pan_or_deselect', pointerId: event.pointerId, startScreen: screen, camera: cameraRef.current };
       return;
     }
 
     // 2. Fita métrica
     if (tool === 'measure') {
+      setHighlightId(null);
       gestureRef.current = { kind: 'draw', pointerId: event.pointerId, startWorld: world, endWorld: world, type: 'measure' };
       setMeasureLine({ start: world, end: world });
       return;
@@ -774,6 +818,7 @@ export default function Editor() {
 
     // 3. Rotação tátil por alça (apenas Admin no modo mover)
     if (isAdmin && rotateHandle && selected && !selected.locked && tool === 'move') {
+      setHighlightId(null);
       const center = { x: selected.x + selected.width / 2, y: selected.y + selected.height / 2 };
       const initialAngle = Math.atan2(world.y - center.y, world.x - center.x) * (180 / Math.PI);
       gestureRef.current = {
@@ -789,12 +834,14 @@ export default function Editor() {
 
     // 4. Redimensionamento por alça (apenas Admin no modo mover)
     if (isAdmin && handle && selected && !selected.locked && tool === 'move') {
+      setHighlightId(null);
       gestureRef.current = { kind: 'resize', pointerId: event.pointerId, startWorld: world, item: clone(selected), corner: handle };
       return;
     }
 
     // 5. Desenho de retângulos ou paredes (apenas Admin)
     if (isAdmin && (tool === 'rectangle' || tool === 'divider')) {
+      setHighlightId(null);
       const snapped = snapPointToElements(world, activeArea.elements, cameraRef.current.scale);
       gestureRef.current = { kind: 'draw', pointerId: event.pointerId, startWorld: snapped.point, endWorld: snapped.point, type: tool };
       setAlignmentGuides(snapped.guides);
@@ -804,6 +851,7 @@ export default function Editor() {
 
     // 6. Modo Exclusivo de Corredores (apenas Admin)
     if (isAdmin && tool === 'corridor') {
+      setHighlightId(null);
       if (item && item.type === 'corridor') {
         setSelectedId(item.id);
         setDesktopSidebarOpen(true);
@@ -818,6 +866,7 @@ export default function Editor() {
 
     // 7. Modo Exclusivo de Mover (apenas Admin)
     if (isAdmin && tool === 'move' && item) {
+      setHighlightId(null);
       if (item.locked) {
         setSelectedId(item.id);
         setSelectedPositionId(null);
@@ -958,9 +1007,9 @@ export default function Editor() {
       return;
     }
 
-    // Limiar tátil anti-toque acidental durante navegação no modo selecionar:
+    // Limiar tátil anti-toque acidental durante navegação no modo selecionar / visualizar:
     // 10px calibrado para permitir seleção limpa e precisa de células sem converter em pan por engano
-    if (gesture.kind === 'pending_select') {
+    if (gesture.kind === 'pending_select' || gesture.kind === 'pending_view_select') {
       const deltaPx = dist(screen, gesture.startScreen);
       if (deltaPx > 10) {
         if (pendingCellTapRef.current) {
@@ -1108,10 +1157,13 @@ export default function Editor() {
 
     if (gesture.pointerId !== event.pointerId) return;
 
-    // Se liberou no modo empty_pan_or_deselect (arrasto no vazio = navegação pelo mapa; toque parado no vazio = desmarcar)
+    // Se liberou no modo empty_pan_or_deselect (arrasto no vazio = navegação pelo mapa; toque parado no vazio = desmarcar e limpar destaque)
     if (gesture.kind === 'empty_pan_or_deselect') {
       const deltaPx = dist(pointToScreen(event.clientX, event.clientY), gesture.startScreen);
       if (deltaPx <= 7) {
+        if (highlightId) {
+          setHighlightId(null);
+        }
         if (!isolatedSpaceId) {
           setSelectedId(null);
           setSelectedPositionId(null);
@@ -1125,6 +1177,7 @@ export default function Editor() {
           startMomentum(velocityRef.current.vx, velocityRef.current.vy);
         }
       }
+      pendingCellTapRef.current = null;
       gestureRef.current = null;
       return;
     }
@@ -1138,40 +1191,42 @@ export default function Editor() {
       if (!precisionNavMode && isTouch && speed >= 0.75 && timeSinceMove < 45) {
         startMomentum(velocityRef.current.vx, velocityRef.current.vy);
       }
+      pendingCellTapRef.current = null;
       gestureRef.current = null;
       return;
     }
 
-    // Se liberou no modo pending_select (toque limpo e intencional sem arrasto no mapa)
-    if (gesture.kind === 'pending_select') {
+    // Se liberou no modo pending_select ou pending_view_select (toque limpo e intencional sem arrasto no mapa)
+    if (gesture.kind === 'pending_select' || gesture.kind === 'pending_view_select') {
+      const isViewMode = gesture.kind === 'pending_view_select';
       const deltaPx = dist(pointToScreen(event.clientX, event.clientY), gesture.startScreen);
       if (deltaPx <= 7) {
+        // Qualquer toque intencional no mapa encerra o contorno pulsante de busca
+        if (highlightId) {
+          setHighlightId(null);
+        }
         // Se houve toque em célula interna sem arrasto, seleciona a célula
         if (pendingCellTapRef.current && pendingCellTapRef.current.pointerId === event.pointerId) {
           const { pos, zoneId } = pendingCellTapRef.current;
           setSelectedId(zoneId);
           setSelectedPositionId(pos.id);
-          // Se interagiu com outra célula/posição, limpa o destaque da pesquisa anterior
-          if (highlightId && highlightId !== pos.id && highlightId !== zoneId) {
-            setHighlightId(null);
+          if (!isViewMode) {
+            setDesktopSidebarOpen(true);
+            setMobileDrawerOpen(true);
+            setToast(
+              isAdmin
+                ? `Posição ${pos.code} selecionada para edição individual.`
+                : `Posição ${pos.code} selecionada para consulta.`
+            );
           }
-          setDesktopSidebarOpen(true);
-          setMobileDrawerOpen(true);
-          setToast(
-            isAdmin
-              ? `Posição ${pos.code} selecionada para edição individual.`
-              : `Posição ${pos.code} selecionada para consulta.`
-          );
         } else {
           // Toque no elemento / zona
           setSelectedId(gesture.item.id);
           setSelectedPositionId(null);
-          // Se interagiu com outro elemento, limpa o destaque da pesquisa anterior
-          if (highlightId && highlightId !== gesture.item.id) {
-            setHighlightId(null);
+          if (!isViewMode) {
+            setDesktopSidebarOpen(true);
+            setMobileDrawerOpen(true);
           }
-          setDesktopSidebarOpen(true);
-          setMobileDrawerOpen(true);
         }
       }
       pendingCellTapRef.current = null;
@@ -1182,12 +1237,12 @@ export default function Editor() {
     if (pendingCellTapRef.current && pendingCellTapRef.current.pointerId === event.pointerId) {
       const deltaPx = dist(pointToScreen(event.clientX, event.clientY), pendingCellTapRef.current.startScreen);
       if (deltaPx <= 7) {
+        if (highlightId) {
+          setHighlightId(null);
+        }
         const { pos, zoneId } = pendingCellTapRef.current;
         setSelectedId(zoneId);
         setSelectedPositionId(pos.id);
-        if (highlightId && highlightId !== pos.id && highlightId !== zoneId) {
-          setHighlightId(null);
-        }
         setDesktopSidebarOpen(true);
         setMobileDrawerOpen(true);
         setToast(
@@ -1201,13 +1256,13 @@ export default function Editor() {
 
     // Se liberou ainda no estado pending_select_or_move, é um TOQUE / SELEÇÃO LIMPA!
     if (gesture.kind === 'pending_select_or_move') {
+      if (highlightId) {
+        setHighlightId(null);
+      }
       if (isMultiSelectMode || event.shiftKey || event.ctrlKey || event.metaKey) {
         toggleSelectId(gesture.item.id);
       } else {
         setSelectedId(gesture.item.id);
-        if (highlightId && highlightId !== gesture.item.id) {
-          setHighlightId(null);
-        }
       }
       gestureRef.current = null;
       return;
@@ -1503,7 +1558,7 @@ export default function Editor() {
     setToast(`Porte do volume alterado para ${newProductSize}: Divisões criadas automaticamente!`);
   };
 
-  // Navega até resultado de busca (o destaque permanece até outra interação)
+  // Navega até resultado de busca entrando automaticamente em Modo Visualização (destaque persiste até outra interação)
   const handleNavigateToSearchResult = (result: SearchResult) => {
     if (result.areaId !== activeId) {
       setActiveId(result.areaId);
@@ -1511,38 +1566,113 @@ export default function Editor() {
     const targetX = result.x + result.width / 2;
     const targetY = result.y + result.height / 2;
     navigateToPoint(targetX, targetY, 1.4);
+    setTool('pan');
+    setMeasureLine(null);
+    setDesktopSidebarOpen(false);
+    setMobileDrawerOpen(false);
     setSelectedId(result.elementId);
     if (result.positionId) {
       setSelectedPositionId(result.positionId);
       setHighlightId(result.positionId);
-      setToast(`Código localizado: ${result.positionCode || result.address}`);
+      setToast(`Modo Visualização · Código localizado: ${result.positionCode || result.address}`);
     } else {
       setSelectedPositionId(null);
       setHighlightId(result.elementId);
-      setToast(`Zona localizada: ${result.elementName}`);
+      setToast(`Modo Visualização · Zona localizada: ${result.elementName}`);
     }
-    setDesktopSidebarOpen(true);
-    setMobileDrawerOpen(true);
     // O destaque não possui temporizador e permanece ativo até outra ação do usuário!
   };
 
-  // Cria nova área limpa
-  const createNewArea = () => {
+  const openWarehouseManager = useCallback(
+    (mode: WarehouseManagerMode = 'list', editAreaId: string | null = null) => {
+      if (!isAdmin) {
+        setToast('Apenas administradores podem criar, editar ou excluir galpões.');
+        return;
+      }
+      setWarehouseManagerMode(mode);
+      setWarehouseManagerEditId(editAreaId);
+      setModal('warehouses');
+    },
+    [isAdmin]
+  );
+
+  // Cria nova área (personalizada ou padrão)
+  const handleCreateWarehouse = (input?: {
+    name?: string;
+    widthMeters?: number;
+    heightMeters?: number;
+    scaleRatio?: number;
+    activate?: boolean;
+  }) => {
     if (!isAdmin) {
       setToast('Apenas administradores podem criar novos galpões.');
       return;
     }
-    const newArea: FloorArea = {
-      id: createId('wh'),
-      name: `Galpão ${areas.length + 1}`,
-      scaleRatio: DEFAULT_SCALE_RATIO,
-      widthMeters: DEFAULT_WIDTH_METERS,
-      heightMeters: DEFAULT_HEIGHT_METERS,
-      elements: [],
-    };
+    const newArea = buildNewWarehouse(areas, input);
     if (recordAreas([...areas, newArea])) {
-      setActiveId(newArea.id);
-      setToast(`Galpão criado.`);
+      if (input?.activate !== false) {
+        setActiveId(newArea.id);
+        setSelectedId(null);
+        setSelectedPositionId(null);
+        setHighlightId(null);
+        setIsolatedSpaceId(null);
+      }
+      setToast(`Galpão "${newArea.name}" criado.`);
+      if (input?.activate !== false) {
+        setTimeout(() => fitPlan(), 120);
+      }
+    }
+  };
+
+  // Atualiza nome, dimensões e escala de um galpão existente
+  const handleUpdateWarehouse = (
+    areaId: string,
+    updates: {
+      name: string;
+      widthMeters: number;
+      heightMeters: number;
+      scaleRatio: number;
+      scaleElements: boolean;
+    }
+  ) => {
+    if (!isAdmin) {
+      setToast('Apenas administradores podem editar galpões.');
+      return;
+    }
+    const target = areas.find((a) => a.id === areaId);
+    if (!target) return;
+
+    const updatedArea = updateWarehouseArea(target, updates);
+    const nextAreas = areas.map((a) => (a.id === areaId ? updatedArea : a));
+    if (recordAreas(nextAreas)) {
+      setToast(`Galpão "${updatedArea.name}" atualizado.`);
+      if (areaId === activeId) {
+        setTimeout(() => fitPlan(), 120);
+      }
+    }
+  };
+
+  // Exclui um galpão garantindo que ao menos 1 permaneça ativo
+  const handleDeleteWarehouse = (areaId: string) => {
+    if (!isAdmin) {
+      setToast('Apenas administradores podem excluir galpões.');
+      return;
+    }
+    const result = deleteWarehouseArea(areas, areaId, activeId);
+    if (!result) {
+      setToast('É obrigatório manter pelo menos 1 galpão cadastrado no sistema.');
+      return;
+    }
+    if (recordAreas(result.areas)) {
+      if (result.nextActiveId !== activeId) {
+        setActiveId(result.nextActiveId);
+        setSelectedId(null);
+        setSelectedPositionId(null);
+        setHighlightId(null);
+        setIsolatedSpaceId(null);
+        setTimeout(() => fitPlan(), 120);
+      }
+      setToast(`Galpão "${result.deletedArea.name}" excluído.`);
     }
   };
 
@@ -1596,6 +1726,7 @@ export default function Editor() {
   const handleSpotlightAction = useCallback((action: SpotlightCommandAction) => {
     const adminOnlyActions: SpotlightCommandAction[] = [
       'new_warehouse',
+      'manage_warehouses',
       'resize_warehouse',
       'import_backup',
       'open_calibration',
@@ -1610,7 +1741,10 @@ export default function Editor() {
 
     switch (action) {
       case 'new_warehouse':
-        createNewArea();
+        openWarehouseManager('create');
+        break;
+      case 'manage_warehouses':
+        openWarehouseManager('list');
         break;
       case 'resize_warehouse':
         setModal('warehouse-size');
@@ -1641,11 +1775,13 @@ export default function Editor() {
         setModal('shortcuts');
         break;
       case 'mode_select':
+        setHighlightId(null);
         setTool('select');
         setMeasureLine(null);
         setToast('Modo Seleção Ativado');
         break;
       case 'mode_move':
+        setHighlightId(null);
         setTool('move');
         setMeasureLine(null);
         setToast('Modo Mover Ativado');
@@ -1656,33 +1792,52 @@ export default function Editor() {
         setToast('Modo Navegar Ativado');
         break;
       case 'mode_zone':
+        setHighlightId(null);
         setTool('rectangle');
         setMeasureLine(null);
         setToast('Modo Nova Zona: Arraste no mapa');
         break;
       case 'mode_corridor':
+        setHighlightId(null);
         setTool('corridor');
         setMeasureLine(null);
         setToast('Modo Corredores: Clique no mapa');
         break;
       case 'mode_measure':
+        setHighlightId(null);
         setTool('measure');
         setToast('Fita Métrica: Clique em dois pontos');
         break;
     }
-  }, [fitPlan, isAdmin, toggleTheme]);
+  }, [fitPlan, isAdmin, openWarehouseManager, toggleTheme]);
 
   const handleSpotlightNavigate = useCallback(
-    (targetAreaId: string, elementId: string, x: number, y: number, name: string, code?: string) => {
+    (
+      targetAreaId: string,
+      elementId: string,
+      x: number,
+      y: number,
+      name: string,
+      _code?: string,
+      positionId?: string
+    ) => {
       if (targetAreaId !== activeId) {
         setActiveId(targetAreaId);
       }
+      setTool('pan');
+      setMeasureLine(null);
+      setDesktopSidebarOpen(false);
+      setMobileDrawerOpen(false);
       setSelectedId(elementId);
-      setSelectedPositionId(null);
-      setHighlightId(elementId);
+      if (positionId) {
+        setSelectedPositionId(positionId);
+        setHighlightId(positionId);
+      } else {
+        setSelectedPositionId(null);
+        setHighlightId(elementId);
+      }
       navigateToPoint(x, y, 1.4);
-      setDesktopSidebarOpen(true);
-      setToast(`Localizado: ${name}`);
+      setToast(`Modo Visualização · Localizado: ${name}`);
     },
     [activeId, navigateToPoint, setSelectedId]
   );
@@ -1707,8 +1862,12 @@ export default function Editor() {
       <TopCommandBar
         areas={areas}
         activeAreaId={activeId}
-        onSelectArea={(id) => setActiveId(id)}
-        onCreateNewArea={createNewArea}
+        onSelectArea={(id) => {
+          setActiveId(id);
+          setHighlightId(null);
+        }}
+        onCreateNewArea={() => openWarehouseManager('create')}
+        onOpenWarehouseManager={() => openWarehouseManager('list')}
         bounds={bounds}
         onOpenResizeDialog={() => isAdmin && setModal('warehouse-size')}
         tool={tool}
@@ -1751,6 +1910,8 @@ export default function Editor() {
         connectionStatus={sharedMap.connectionStatus}
         syncStatus={sharedMap.syncStatus}
         mapVersion={sharedMap.mapVersion}
+        hasUnsavedChanges={sharedMap.hasUnsavedChanges}
+        onSaveToCloud={() => void sharedMap.flushSaveToCloud()}
         onOpenAccessPanel={() => setModal('access-panel')}
         onOpenLogin={() => setModal('auth')}
       />
@@ -1809,90 +1970,127 @@ export default function Editor() {
                 isDark ? 'bg-[#080d15]' : 'bg-[#f8fafc]'
               }`}
             >
-              {/* BANNER FLUTUANTE DE MODO FOCO EXCLUSIVO */}
-              {isolatedSpace && (
-                <div
-                  onPointerDown={(e) => e.stopPropagation()}
-                  onTouchStart={(e) => e.stopPropagation()}
-                  className={`absolute top-3 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 sm:gap-3 px-3.5 py-2 rounded-xl bg-slate-900/95 border border-orange-500/80 shadow-2xl backdrop-blur-md text-xs transition-all duration-150 max-w-[96vw] ${
-                    isDragging ? 'opacity-20 pointer-events-none' : 'opacity-100'
-                  }`}
-                >
-                  <div className="flex items-center gap-2 min-w-0">
-                    <Target className="w-4 h-4 text-orange-400 shrink-0" />
-                    <div className="flex flex-col min-w-0">
-                      <div className="flex items-center gap-1.5">
-                        <span className="font-bold text-slate-100 truncate max-w-[140px] sm:max-w-none">
-                          Modo Foco: {isolatedSpace.name}
-                        </span>
-                        <span className="text-[10px] text-orange-400 font-mono hidden sm:inline">
-                          ({Math.round(isolatedSpace.width / scaleRatio)}m × {Math.round(isolatedSpace.height / scaleRatio)}m)
+              {/* PILHA SUPERIOR DE AVISOS NÃO INTRUSIVOS (FOCO / DESTAQUE / LEMBRETE DE ALTERAÇÕES PENDENTES) */}
+              <div className="absolute top-3 left-1/2 -translate-x-1/2 z-30 flex flex-col items-center gap-2 pointer-events-none max-w-[96vw]">
+                {/* BANNER FLUTUANTE DE MODO FOCO EXCLUSIVO */}
+                {isolatedSpace && (
+                  <div
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onTouchStart={(e) => e.stopPropagation()}
+                    className={`pointer-events-auto flex items-center gap-2 sm:gap-3 px-3.5 py-2 rounded-xl bg-slate-900/95 border border-orange-500/80 shadow-2xl backdrop-blur-md text-xs transition-all duration-150 max-w-[96vw] ${
+                      isDragging ? 'opacity-20 pointer-events-none' : 'opacity-100'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2 min-w-0">
+                      <Target className="w-4 h-4 text-orange-400 shrink-0" />
+                      <div className="flex flex-col min-w-0">
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-bold text-slate-100 truncate max-w-[140px] sm:max-w-none">
+                            Modo Foco: {isolatedSpace.name}
+                          </span>
+                          <span className="text-[10px] text-orange-400 font-mono hidden sm:inline">
+                            ({Math.round(isolatedSpace.width / scaleRatio)}m × {Math.round(isolatedSpace.height / scaleRatio)}m)
+                          </span>
+                        </div>
+                        <span className="text-[10px] text-slate-400 hidden md:inline">
+                          Restante do armazém bloqueado contra toque e edição acidental
                         </span>
                       </div>
-                      <span className="text-[10px] text-slate-400 hidden md:inline">
-                        Restante do armazém bloqueado contra toque e edição acidental
-                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-1.5 ml-2 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsolatedSpaceId(null);
+                          setToast('Modo Foco finalizado. Todos os itens desbloqueados.');
+                        }}
+                        className="px-3 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-semibold text-[11px] flex items-center gap-1.5 transition-colors"
+                      >
+                        <ArrowLeft className="w-3 h-3 text-orange-400" />
+                        <span>Sair do Foco</span>
+                      </button>
                     </div>
                   </div>
+                )}
 
-                  <div className="flex items-center gap-1.5 ml-2 shrink-0">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setIsolatedSpaceId(null);
-                        setToast('Modo Foco finalizado. Todos os itens desbloqueados.');
-                      }}
-                      className="px-3 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-semibold text-[11px] flex items-center gap-1.5 transition-colors"
-                    >
-                      <ArrowLeft className="w-3 h-3 text-orange-400" />
-                      <span>Sair do Foco</span>
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {/* BANNER FLUTUANTE DE ITEM EM DESTAQUE PELA BUSCA */}
-              {highlightedDetails && !isolatedSpace && (
-                <div
-                  onPointerDown={(e) => e.stopPropagation()}
-                  onTouchStart={(e) => e.stopPropagation()}
-                  className={`absolute top-3 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 sm:gap-3 px-3.5 py-1.5 rounded-full bg-slate-900/95 border border-orange-500/80 shadow-2xl backdrop-blur-md text-xs transition-all duration-150 max-w-[96vw] ${
-                    isDragging ? 'opacity-30 pointer-events-none' : 'opacity-100'
-                  }`}
-                >
-                  <span className="relative flex h-2.5 w-2.5 shrink-0">
-                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-orange-400 opacity-75"></span>
-                    <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-orange-500"></span>
-                  </span>
-
-                  <div className="flex items-center gap-1.5 min-w-0">
-                    <span className="text-[11px] text-slate-400 hidden sm:inline">Destaque:</span>
-                    <span className="font-bold text-orange-400 font-mono text-xs truncate max-w-[150px] sm:max-w-[240px]">
-                      {highlightedDetails.name}
+                {/* BANNER FLUTUANTE DE ITEM EM DESTAQUE PELA BUSCA */}
+                {highlightedDetails && !isolatedSpace && (
+                  <div
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onTouchStart={(e) => e.stopPropagation()}
+                    className={`pointer-events-auto flex items-center gap-2 sm:gap-3 px-3.5 py-1.5 rounded-full bg-slate-900/95 border border-red-500/80 shadow-2xl backdrop-blur-md text-xs transition-all duration-150 max-w-[96vw] ${
+                      isDragging ? 'opacity-30 pointer-events-none' : 'opacity-100'
+                    }`}
+                  >
+                    <span className="relative flex h-2.5 w-2.5 shrink-0">
+                      <span className="movare-search-pulse inline-flex rounded-full h-2.5 w-2.5 bg-red-500 ring-2 ring-red-400/50"></span>
                     </span>
-                  </div>
 
-                  <div className="flex items-center gap-1 ml-1 shrink-0">
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <span className="text-[11px] text-slate-400 hidden sm:inline">Destaque:</span>
+                      <span className="font-bold text-red-400 font-mono text-xs truncate max-w-[150px] sm:max-w-[240px]">
+                        {highlightedDetails.name}
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-1 ml-1 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => navigateToPoint(highlightedDetails.x, highlightedDetails.y, 1.4)}
+                        className="px-2 py-0.5 rounded-md bg-slate-800 hover:bg-slate-700 text-sky-400 hover:text-sky-300 border border-slate-700/80 font-semibold text-[11px] flex items-center gap-1 transition-colors cursor-pointer"
+                        title="Centralizar no mapa"
+                      >
+                        <Crosshair className="w-3 h-3 text-sky-400" />
+                        <span className="hidden xs:inline">Centralizar</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setHighlightId(null)}
+                        className="p-1 rounded-full text-slate-400 hover:text-white hover:bg-slate-800 transition-colors ml-0.5 cursor-pointer"
+                        title="Limpar destaque"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* LEMBRETE DISCRETO DE ALTERAÇÕES LOCAIS NÃO SALVAS NA NUVEM */}
+                {isAdmin && auth.isConfigured && sharedMap.hasUnsavedChanges && (
+                  <div
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onTouchStart={(e) => e.stopPropagation()}
+                    className={`pointer-events-auto flex items-center gap-2 sm:gap-2.5 px-3 py-1.5 rounded-full border shadow-xl backdrop-blur-md text-xs transition-all duration-150 max-w-[94vw] ${
+                      isDark
+                        ? 'bg-slate-900/95 border-amber-500/65 text-slate-100 shadow-black/70'
+                        : 'bg-white/95 border-amber-400 text-slate-900 shadow-slate-500/20'
+                    } ${isDragging ? 'opacity-20 pointer-events-none' : 'opacity-100'}`}
+                  >
+                    <span className="w-2 h-2 rounded-full bg-amber-400 shrink-0 animate-pulse" />
+                    <span className="text-[11px] font-medium truncate">
+                      Alterações mais recentes não foram salvas
+                      {sharedMap.remoteUpdateNotice
+                        ? ` · Nuvem em v${sharedMap.remoteUpdateNotice.version}`
+                        : ''}
+                    </span>
                     <button
                       type="button"
-                      onClick={() => navigateToPoint(highlightedDetails.x, highlightedDetails.y, 1.4)}
-                      className="px-2 py-0.5 rounded-md bg-slate-800 hover:bg-slate-700 text-sky-400 hover:text-sky-300 border border-slate-700/80 font-semibold text-[11px] flex items-center gap-1 transition-colors cursor-pointer"
-                      title="Centralizar no mapa"
+                      disabled={sharedMap.syncStatus === 'syncing'}
+                      onClick={() => void sharedMap.flushSaveToCloud()}
+                      className="px-2.5 py-0.5 rounded-full bg-amber-500 hover:bg-amber-400 disabled:opacity-60 text-slate-950 font-bold text-[11px] flex items-center gap-1 transition-colors cursor-pointer shrink-0"
+                      title="Enviar todas as edições concluídas para a nuvem (Ctrl+S)"
                     >
-                      <Crosshair className="w-3 h-3 text-sky-400" />
-                      <span className="hidden xs:inline">Centralizar</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setHighlightId(null)}
-                      className="p-1 rounded-full text-slate-400 hover:text-white hover:bg-slate-800 transition-colors ml-0.5 cursor-pointer"
-                      title="Limpar destaque"
-                    >
-                      <X className="w-3.5 h-3.5" />
+                      {sharedMap.syncStatus === 'syncing' ? (
+                        <Loader2 className="w-3 h-3 animate-spin" />
+                      ) : (
+                        <UploadCloud className="w-3 h-3" />
+                      )}
+                      <span>{sharedMap.syncStatus === 'syncing' ? 'Salvando...' : 'Salvar na nuvem'}</span>
                     </button>
                   </div>
-                </div>
-              )}
+                )}
+              </div>
 
               <svg
                 className={`absolute inset-0 w-full h-full touch-none select-none ${
@@ -1941,9 +2139,9 @@ export default function Editor() {
                     />
                   </pattern>
 
-                  {/* Efeito Glow para Destaque de Busca */}
-                  <filter id="glow-highlight" x="-20%" y="-20%" width="140%" height="140%">
-                    <feDropShadow dx="0" dy="0" stdDeviation="8" floodColor="#f97316" floodOpacity="0.9" />
+                  {/* Efeito Glow Vermelho para Destaque de Busca */}
+                  <filter id="glow-highlight" x="-25%" y="-25%" width="150%" height="150%">
+                    <feDropShadow dx="0" dy="0" stdDeviation="6" floodColor="#ef4444" floodOpacity="0.95" />
                   </filter>
                 </defs>
 
@@ -2005,11 +2203,14 @@ export default function Editor() {
                     elements={activeArea.elements}
                     selectedId={selectedId}
                     onSelectZone={(zone) => {
+                      setHighlightId(null);
                       setSelectedId(zone.id);
                       setSelectedPositionId(null);
                       navigateToPoint(zone.x + zone.width / 2, zone.y + zone.height / 2, 1.3);
-                      setDesktopSidebarOpen(true);
-                      setMobileDrawerOpen(true);
+                      if (tool !== 'pan') {
+                        setDesktopSidebarOpen(true);
+                        setMobileDrawerOpen(true);
+                      }
                       setToast(`Zona focalizada: ${zone.name}`);
                     }}
                     scaleRatio={scaleRatio}
@@ -2023,8 +2224,6 @@ export default function Editor() {
                     const isSelected = selectedIds.includes(item.id);
                     const isPrimarySelected = item.id === selectedId;
                     const isDirectlyHighlighted = item.id === highlightId;
-                    const containsHighlightedPosition = !isDirectlyHighlighted && !!item.internalPositions?.some((p) => p.id === highlightId);
-                    const isHighlighted = isDirectlyHighlighted || containsHighlightedPosition;
                     const isCollidedObstacle = collisionContactIds.has(item.id);
                     const isLocked = !!item.locked;
 
@@ -2042,7 +2241,7 @@ export default function Editor() {
 
                     const isItemInteractive = (() => {
                       if (!belongsToIsolated) return false;
-                      if (tool === 'pan') return false; // Menu visualizar não interage com NADA (zonas, células, paredes, corredores)
+                      if (tool === 'pan') return true; // Modo visualização: toque exibe resumo simplificado, arrasto navega
                       if (tool === 'corridor') return rendered.type === 'corridor'; // Adição/seleção de corredores no menu corredor
                       if (tool === 'select') return true; // Menu selecionar: interage e seleciona todos os elementos (inclusive corredores)
                       if (tool === 'move') return true; // Movimento e redimensionamento exclusivo do menu mover
@@ -2059,7 +2258,6 @@ export default function Editor() {
                         className={isItemInteractive ? 'cursor-pointer' : 'pointer-events-none select-none'}
                         opacity={belongsToIsolated ? 1 : 0.06}
                         pointerEvents={isItemInteractive ? 'all' : 'none'}
-                        filter={isHighlighted ? 'url(#glow-highlight)' : undefined}
                         transform={rotation ? `rotate(${rotation}, ${cx}, ${cy})` : undefined}
                       >
                         {rendered.type === 'rack' ? (
@@ -2077,12 +2275,28 @@ export default function Editor() {
                                   height={rendered.height}
                                   rx={3}
                                   fill={isDark ? 'rgba(249, 115, 22, 0.15)' : 'rgba(249, 115, 22, 0.12)'}
-                                  stroke={isCollidedObstacle ? '#ef4444' : isDirectlyHighlighted ? '#f97316' : isSelected ? (isLocked ? '#eab308' : '#f97316') : color}
+                                  stroke={isCollidedObstacle ? '#ef4444' : isDirectlyHighlighted ? '#ef4444' : isSelected ? (isLocked ? '#eab308' : '#f97316') : color}
                                   strokeWidth={isCollidedObstacle ? 3.5 : isDirectlyHighlighted ? 3.5 : isSelected ? 3 : 2}
                                   strokeDasharray={isLocked ? '5 3' : isSelected && selectedIds.length > 1 ? '4 2' : undefined}
                                   vectorEffect="non-scaling-stroke"
                                   pointerEvents={isItemInteractive ? 'all' : 'none'}
                                 />
+                                {isDirectlyHighlighted && (
+                                  <rect
+                                    x={rendered.x}
+                                    y={rendered.y}
+                                    width={rendered.width}
+                                    height={rendered.height}
+                                    rx={4}
+                                    fill="none"
+                                    stroke="#ef4444"
+                                    strokeWidth={4.5}
+                                    vectorEffect="non-scaling-stroke"
+                                    filter="url(#glow-highlight)"
+                                    className="movare-search-pulse"
+                                    pointerEvents="none"
+                                  />
+                                )}
 
                                 {/* Vigas dos Módulos */}
                                 {Array.from({ length: modulesCount - 1 }, (_, i) => {
@@ -2163,12 +2377,30 @@ export default function Editor() {
                                   height={baseZoneH}
                                   rx={4}
                                   fill={`${color}${isSelected ? '45' : '22'}`}
-                                  stroke={isCollidedObstacle ? '#ef4444' : isDirectlyHighlighted ? '#f97316' : isSelected ? (isLocked ? '#eab308' : isPrimarySelected ? '#38bdf8' : '#60a5fa') : color}
+                                  stroke={isCollidedObstacle ? '#ef4444' : isDirectlyHighlighted ? '#ef4444' : isSelected ? (isLocked ? '#eab308' : isPrimarySelected ? '#38bdf8' : '#60a5fa') : color}
                                   strokeWidth={isCollidedObstacle ? 3.5 : isDirectlyHighlighted ? 3.5 : isSelected ? (isPrimarySelected ? 3 : 2.5) : 2}
                                   strokeDasharray={isLocked ? '5 3' : isSelected && selectedIds.length > 1 ? '4 2' : undefined}
                                   vectorEffect="non-scaling-stroke"
                                   pointerEvents={isItemInteractive ? 'all' : 'none'}
                                 />
+
+                                {/* Contorno vermelho pulsante na zona pesquisada */}
+                                {isDirectlyHighlighted && (
+                                  <rect
+                                    x={baseZoneX}
+                                    y={baseZoneY}
+                                    width={baseZoneW}
+                                    height={baseZoneH}
+                                    rx={5}
+                                    fill="none"
+                                    stroke="#ef4444"
+                                    strokeWidth={4.5}
+                                    vectorEffect="non-scaling-stroke"
+                                    filter="url(#glow-highlight)"
+                                    className="movare-search-pulse"
+                                    pointerEvents="none"
+                                  />
+                                )}
 
                                 {/* POSIÇÕES INTERNAS MODULARES (Pertencem à zona, movem-se com ela) */}
                                 {rendered.internalPositions && rendered.internalPositions.length > 0 && (
@@ -2182,14 +2414,14 @@ export default function Editor() {
                                       const posX = baseZoneX + relX;
                                       const posY = baseZoneY + relY;
                                       const isPosSelected = selectedPositionId === pos.id;
-                                      const isPosHighlighted = highlightId === pos.id || (highlightId === rendered.id && isPosSelected);
+                                      const isPosHighlighted = highlightId === pos.id;
                                       const isOccupied = pos.status === 'occupied';
                                       const isReserved = pos.status === 'reserved';
 
                                       const posFill = isPosHighlighted
-                                        ? 'rgba(239, 68, 68, 0.45)'
+                                        ? 'rgba(239, 68, 68, 0.32)'
                                         : isPosSelected
-                                        ? 'rgba(239, 68, 68, 0.35)'
+                                        ? 'rgba(56, 189, 248, 0.25)'
                                         : isOccupied
                                         ? 'rgba(34, 197, 94, 0.22)'
                                         : isReserved
@@ -2201,7 +2433,7 @@ export default function Editor() {
                                       const posStroke = isPosHighlighted
                                         ? '#ef4444'
                                         : isPosSelected
-                                        ? '#ef4444'
+                                        ? '#38bdf8'
                                         : isOccupied
                                         ? '#22c55e'
                                         : isReserved
@@ -2224,9 +2456,9 @@ export default function Editor() {
                                             strokeOpacity={posStrokeOpacity}
                                             strokeWidth={isPosHighlighted ? 3 : isPosSelected ? 2.5 : 1}
                                             strokeDasharray={pos.status === 'empty' && !isPosSelected && !isPosHighlighted ? '3 2' : undefined}
-                                            pointerEvents={tool === 'select' && isItemInteractive ? 'all' : 'none'}
+                                            pointerEvents={(tool === 'select' || tool === 'pan') && isItemInteractive ? 'all' : 'none'}
                                             onPointerDown={(e) => {
-                                              if (tool !== 'select' || !isItemInteractive) return;
+                                              if ((tool !== 'select' && tool !== 'pan') || !isItemInteractive) return;
                                               const scr = pointToScreen(e.clientX, e.clientY);
                                               pendingCellTapRef.current = {
                                                 pos,
@@ -2277,6 +2509,33 @@ export default function Editor() {
                                             </text>
                                           )}
                                         </g>
+                                      );
+                                    })}
+
+                                    {/* Contorno vermelho pulsante sobre a célula interna pesquisada (renderizado por cima para nunca ser coberto) */}
+                                    {rendered.internalPositions.map((pos, posIdx) => {
+                                      if (highlightId !== pos.id) return null;
+                                      const relX = Number.isFinite(pos.relX) ? pos.relX : Number.isFinite((pos as any).x) ? (pos as any).x : 0;
+                                      const relY = Number.isFinite(pos.relY) ? pos.relY : Number.isFinite((pos as any).y) ? (pos as any).y : 0;
+                                      const relWidth = Number.isFinite(pos.relWidth) && pos.relWidth > 0 ? pos.relWidth : Number.isFinite((pos as any).width) ? (pos as any).width : 24;
+                                      const relHeight = Number.isFinite(pos.relHeight) && pos.relHeight > 0 ? pos.relHeight : Number.isFinite((pos as any).height) ? (pos as any).height : 24;
+
+                                      return (
+                                        <rect
+                                          key={`highlight-pos-${pos.id || posIdx}`}
+                                          x={baseZoneX + relX}
+                                          y={baseZoneY + relY}
+                                          width={relWidth}
+                                          height={relHeight}
+                                          rx={3}
+                                          fill="none"
+                                          stroke="#ef4444"
+                                          strokeWidth={4}
+                                          vectorEffect="non-scaling-stroke"
+                                          filter="url(#glow-highlight)"
+                                          className="movare-search-pulse"
+                                          pointerEvents="none"
+                                        />
                                       );
                                     })}
                                   </g>
@@ -2406,6 +2665,22 @@ export default function Editor() {
                                 pointerEvents="none"
                               />
                             )}
+                            {isDirectlyHighlighted && (
+                              <rect
+                                x={rendered.x}
+                                y={rendered.y}
+                                width={Math.max(20, rendered.width)}
+                                height={Math.max(20, rendered.height)}
+                                rx={5}
+                                fill="rgba(239, 68, 68, 0.12)"
+                                stroke="#ef4444"
+                                strokeWidth={4}
+                                vectorEffect="non-scaling-stroke"
+                                filter="url(#glow-highlight)"
+                                className="movare-search-pulse"
+                                pointerEvents="none"
+                              />
+                            )}
 
                             {/* Texto de identificação do corredor — palavras puras sem fundo */}
                             <text
@@ -2449,10 +2724,12 @@ export default function Editor() {
                               y1={rendered.y}
                               x2={rendered.x + rendered.width}
                               y2={rendered.y + rendered.height}
-                              stroke={isSelected ? (isLocked ? '#eab308' : '#38bdf8') : color}
-                              strokeWidth={isSelected ? 5 : 3.5}
+                              stroke={isDirectlyHighlighted ? '#ef4444' : isSelected ? (isLocked ? '#eab308' : '#38bdf8') : color}
+                              strokeWidth={isDirectlyHighlighted ? 5.5 : isSelected ? 5 : 3.5}
                               strokeLinecap="round"
                               vectorEffect="non-scaling-stroke"
+                              filter={isDirectlyHighlighted ? 'url(#glow-highlight)' : undefined}
+                              className={isDirectlyHighlighted ? 'movare-search-pulse' : undefined}
                               pointerEvents="none"
                             />
                             {/* Hitbox ampla de toque para celular */}
@@ -2746,74 +3023,6 @@ export default function Editor() {
                       </g>
                     </g>
                   )}
-
-                  {/* BEACON PULSANTE E INDICADOR VISUAL DO ITEM DESTACADO PELA BUSCA */}
-                  {highlightedDetails && (
-                    <g pointerEvents="none">
-                      {/* Anéis de pulso de radar contínuos (permanece visível navegando pelo mapa em qualquer zoom) */}
-                      <circle
-                        cx={highlightedDetails.x}
-                        cy={highlightedDetails.y}
-                        r={24}
-                        fill="none"
-                        stroke="#f97316"
-                        strokeWidth={2.5 / camera.scale}
-                        opacity="0.8"
-                        vectorEffect="non-scaling-stroke"
-                      >
-                        <animate attributeName="r" from={10 / camera.scale} to={48 / camera.scale} dur="1.8s" repeatCount="indefinite" />
-                        <animate attributeName="opacity" from="0.9" to="0" dur="1.8s" repeatCount="indefinite" />
-                      </circle>
-                      <circle
-                        cx={highlightedDetails.x}
-                        cy={highlightedDetails.y}
-                        r={16}
-                        fill="none"
-                        stroke="#fb923c"
-                        strokeWidth={1.8 / camera.scale}
-                        opacity="0.6"
-                        vectorEffect="non-scaling-stroke"
-                      >
-                        <animate attributeName="r" from={6 / camera.scale} to={30 / camera.scale} dur="1.8s" begin="0.5s" repeatCount="indefinite" />
-                        <animate attributeName="opacity" from="0.8" to="0" dur="1.8s" begin="0.5s" repeatCount="indefinite" />
-                      </circle>
-
-                      {/* Pin Flutuante de Localização com Etiqueta */}
-                      <g transform={`translate(${highlightedDetails.x}, ${highlightedDetails.y - 28 / camera.scale}) scale(${1 / Math.max(camera.scale, 0.45)})`}>
-                        <path
-                          d="M 0 0 C -7 -11 -12 -18 -12 -25 A 12 12 0 1 1 12 -25 C 12 -18 7 -11 0 0 Z"
-                          fill="#f97316"
-                          stroke="#ffffff"
-                          strokeWidth="2"
-                          filter="drop-shadow(0px 3px 6px rgba(0,0,0,0.65))"
-                        />
-                        <circle cx="0" cy="-25" r="4.5" fill="#ffffff" />
-                        <g transform="translate(0, -38)">
-                          <rect
-                            x={-Math.max(30, (highlightedDetails.code || highlightedDetails.name).length * 4.2 + 8)}
-                            y={-14}
-                            width={Math.max(60, (highlightedDetails.code || highlightedDetails.name).length * 8.4 + 16)}
-                            height={18}
-                            rx={4}
-                            fill="rgba(15, 23, 42, 0.92)"
-                            stroke="#f97316"
-                            strokeWidth="1"
-                          />
-                          <text
-                            x="0"
-                            y="-1"
-                            textAnchor="middle"
-                            fill="#ffffff"
-                            fontSize="10"
-                            fontWeight="bold"
-                            fontFamily="'JetBrains Mono', monospace"
-                          >
-                            {highlightedDetails.code || highlightedDetails.name}
-                          </text>
-                        </g>
-                      </g>
-                    </g>
-                  )}
                 </g>
               </svg>
 
@@ -2828,7 +3037,7 @@ export default function Editor() {
                   selectToolSafe(t);
                   if (t === 'select') setToast('Modo Seleção Ativado');
                   else if (t === 'move') setToast('Modo Mover Ativado');
-                  else if (t === 'pan') setToast('Modo Navegar no Mapa');
+                  else if (t === 'pan') setToast('Modo Visualização — Toque em itens para ver resumo');
                   else if (t === 'rectangle') setToast('Modo Nova Zona: Arraste na planta');
                   else if (t === 'corridor') setToast('Modo Corredores: Clique no mapa');
                   else if (t === 'measure') setToast('Fita Métrica: Clique em dois pontos');
@@ -2885,11 +3094,14 @@ export default function Editor() {
                   elements={activeArea.elements}
                   selectedId={selectedId}
                   onSelectZone={(zone) => {
+                    setHighlightId(null);
                     setSelectedId(zone.id);
                     setSelectedPositionId(null);
                     navigateToPoint(zone.x + zone.width / 2, zone.y + zone.height / 2, 1.3);
-                    setDesktopSidebarOpen(true);
-                    setMobileDrawerOpen(true);
+                    if (tool !== 'pan') {
+                      setDesktopSidebarOpen(true);
+                      setMobileDrawerOpen(true);
+                    }
                     setToast(`Zona focalizada: ${zone.name}`);
                   }}
                   scaleRatio={scaleRatio}
@@ -2900,6 +3112,49 @@ export default function Editor() {
                   }}
                 />
               </div>
+
+              {/* CARD COMPACTO DE RESUMO DO PRODUTO NO MODO VISUALIZAÇÃO (SEM ABRIR MENU DE EDIÇÃO) */}
+              {selected && tool === 'pan' && (
+                <ProductQuickCard
+                  element={selected}
+                  position={
+                    selectedPositionId
+                      ? selected.internalPositions?.find((p) => p.id === selectedPositionId) ?? null
+                      : null
+                  }
+                  areaName={activeArea.name}
+                  isDark={isDark}
+                  isAdmin={isAdmin}
+                  isDragging={isDragging}
+                  onClose={() => {
+                    setSelectedId(null);
+                    setSelectedPositionId(null);
+                    setHighlightId(null);
+                  }}
+                  onCenter={() => {
+                    const pos = selectedPositionId
+                      ? selected.internalPositions?.find((p) => p.id === selectedPositionId)
+                      : null;
+                    if (pos) {
+                      const cx = selected.x + (pos.relX || 0) + (pos.relWidth || 25) / 2;
+                      const cy = selected.y + (pos.relY || 0) + (pos.relHeight || 25) / 2;
+                      navigateToPoint(cx, cy, 1.5);
+                    } else {
+                      navigateToPoint(selected.x + selected.width / 2, selected.y + selected.height / 2, 1.4);
+                    }
+                  }}
+                  onSwitchToEdit={
+                    isAdmin
+                      ? () => {
+                          setHighlightId(null);
+                          setTool('select');
+                          setDesktopSidebarOpen(true);
+                          setMobileDrawerOpen(true);
+                        }
+                      : undefined
+                  }
+                />
+              )}
             </div>
           </div>
         </div>
@@ -2924,11 +3179,11 @@ export default function Editor() {
               </button>
             )}
 
-            {/* DESKTOP SIDEBAR (MD+) RETRÁTIL */}
+            {/* DESKTOP SIDEBAR (MD+) ENXUTA E DINÂMICA */}
             <aside
               onPointerDown={(e) => e.stopPropagation()}
               onTouchStart={(e) => e.stopPropagation()}
-              className={`hidden md:flex w-84 shrink-0 border-l p-4 flex-col justify-between z-10 overflow-y-auto transition-all duration-200 relative ${
+              className={`hidden md:flex w-80 shrink-0 border-l p-3.5 flex-col z-10 overflow-y-auto transition-all duration-200 relative ${
                 isDark ? 'bg-slate-900/95 border-slate-800 text-slate-100' : 'bg-white/95 border-slate-200 text-slate-900 shadow-xl'
               } ${isDragging ? 'opacity-25 pointer-events-none scale-[0.99]' : 'opacity-100'} ${
                 !desktopSidebarOpen || freeMoveMode ? '!hidden' : ''
@@ -2943,787 +3198,98 @@ export default function Editor() {
                     ? 'bg-slate-800 border-slate-600 text-slate-300 hover:text-white'
                     : 'bg-white border-slate-300 text-slate-600 hover:text-slate-900'
                 }`}
-                title="Recolher painel de propriedades para liberar tela inteira"
+                title="Recolher painel para liberar tela inteira"
               >
                 <ChevronRight className="w-4 h-4" />
               </button>
-              <div className="space-y-4">
-                {!isAdmin && (
-                  <ReadOnlyNoticeBanner
-                    isDark={isDark}
-                    onRequestLogin={() => setModal('auth')}
-                  />
-                )}
 
-                {/* Banner de Seleção Múltipla & Operações de Grupo */}
-                {isAdmin && selectedIds.length > 1 && (
-                  <div className="p-3 rounded-xl bg-blue-950/40 border border-blue-500/40 space-y-2">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-1.5">
-                        <Users className="w-4 h-4 text-blue-400" />
-                        <span className="text-xs font-bold text-blue-200">
-                          {selectedIds.length} Espaços Selecionados
-                        </span>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => setSelectedIds([])}
-                        className="text-[10px] text-blue-300 hover:text-white"
-                      >
-                        Limpar Seleção
-                      </button>
-                    </div>
-                    <p className="text-[10px] text-slate-300 leading-tight">
-                      Mova qualquer espaço selecionado para mover o grupo inteiro mantendo todos os parâmetros e distâncias.
-                    </p>
-
-                    {/* Alinhamento Rápido em Grupo */}
-                    <div className="pt-1 border-t border-blue-500/20">
-                      <span className="block text-[10px] font-semibold text-slate-300 mb-1">Alinhar Grupo:</span>
-                      <div className="grid grid-cols-4 gap-1">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const aligned = alignGroupElements(selectedElements, 'left', worldWidth, worldHeight);
-                            patchActive((a) => ({
-                              ...a,
-                              elements: a.elements.map((el) => aligned.find((it) => it.id === el.id) || el),
-                            }));
-                            setToast('Espaços alinhados à esquerda');
-                          }}
-                          className="p-1 rounded bg-slate-900 border border-slate-700 text-slate-300 hover:text-white hover:bg-slate-800 text-[10px] flex items-center justify-center gap-0.5"
-                          title="Alinhar à Esquerda"
-                        >
-                          <AlignLeft className="w-3 h-3" />
-                          <span>Esq</span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const aligned = alignGroupElements(selectedElements, 'top', worldWidth, worldHeight);
-                            patchActive((a) => ({
-                              ...a,
-                              elements: a.elements.map((el) => aligned.find((it) => it.id === el.id) || el),
-                            }));
-                            setToast('Espaços alinhados ao topo');
-                          }}
-                          className="p-1 rounded bg-slate-900 border border-slate-700 text-slate-300 hover:text-white hover:bg-slate-800 text-[10px] flex items-center justify-center gap-0.5"
-                          title="Alinhar ao Topo"
-                        >
-                          <AlignLeft className="w-3 h-3 rotate-90" />
-                          <span>Topo</span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const aligned = alignGroupElements(selectedElements, 'distribute-h', worldWidth, worldHeight);
-                            patchActive((a) => ({
-                              ...a,
-                              elements: a.elements.map((el) => aligned.find((it) => it.id === el.id) || el),
-                            }));
-                            setToast('Espaços distribuídos horizontalmente');
-                          }}
-                          className="p-1 rounded bg-slate-900 border border-slate-700 text-slate-300 hover:text-white hover:bg-slate-800 text-[10px] flex items-center justify-center gap-0.5"
-                          title="Distribuir Horizontalmente"
-                        >
-                          <AlignCenter className="w-3 h-3" />
-                          <span>Dist H</span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const aligned = alignGroupElements(selectedElements, 'distribute-v', worldWidth, worldHeight);
-                            patchActive((a) => ({
-                              ...a,
-                              elements: a.elements.map((el) => aligned.find((it) => it.id === el.id) || el),
-                            }));
-                            setToast('Espaços distribuídos verticalmente');
-                          }}
-                          className="p-1 rounded bg-slate-900 border border-slate-700 text-slate-300 hover:text-white hover:bg-slate-800 text-[10px] flex items-center justify-center gap-0.5"
-                          title="Distribuir Verticalmente"
-                        >
-                          <AlignCenter className="w-3 h-3 rotate-90" />
-                          <span>Dist V</span>
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* Ações de Agrupamento */}
-                    <div className="flex gap-1.5 pt-1">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const newGroupId = createId('group');
-                          patchActive((a) => ({
-                            ...a,
-                            elements: a.elements.map((el) =>
-                              selectedIds.includes(el.id) ? { ...el, groupId: newGroupId } : el
-                            ),
-                          }));
-                          setToast(`Grupo criado com ${selectedIds.length} espaços`);
-                        }}
-                        className="flex-1 py-1.5 px-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-[11px] font-bold flex items-center justify-center gap-1"
-                      >
-                        <Users className="w-3.5 h-3.5" />
-                        <span>Agrupar</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          patchActive((a) => ({
-                            ...a,
-                            elements: a.elements.map((el) =>
-                              selectedIds.includes(el.id) ? { ...el, groupId: undefined } : el
-                            ),
-                          }));
-                          setToast('Espaços desagrupados');
-                        }}
-                        className="flex-1 py-1.5 px-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] font-semibold flex items-center justify-center gap-1"
-                      >
-                        <span>Desagrupar</span>
-                      </button>
-                    </div>
-                  </div>
-                )}
-
-                {/* Header do Elemento Selecionado */}
-                <div className="flex items-center justify-between pb-3 border-b border-slate-800 gap-1.5">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <div className="w-3.5 h-3.5 rounded-xs shrink-0" style={{ backgroundColor: selected.color || '#f97316' }} />
-                    <span className="text-xs font-bold uppercase tracking-wider text-slate-400 font-mono truncate">
-                      {selected.type === 'rack'
-                        ? 'Porta-Paletes'
-                        : selected.type === 'rectangle'
-                        ? 'Zona'
-                        : 'Divisória'}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-1.5 shrink-0">
-                    {isAdmin && (
-                      <>
-                        {/* Botão de Modo Movimento Livre (Tela Limpa) */}
-                        <button
-                          type="button"
-                          onClick={() => setFreeMoveMode(true)}
-                          className="px-2 py-1 rounded-md text-xs text-orange-400 bg-orange-500/10 hover:bg-orange-500/20 border border-orange-500/30 flex items-center gap-1 font-semibold transition-colors"
-                          title="Tela limpa com micro-painel para mover e posicionar livremente"
-                        >
-                          <Move className="w-3.5 h-3.5" />
-                          <span className="text-[11px] hidden lg:inline">Mover Livre</span>
-                        </button>
-                        {/* Botão de Trava / Bloqueio */}
-                        <button
-                          type="button"
-                          onClick={toggleLockSelected}
-                          className={`p-1.5 rounded-md text-xs flex items-center gap-1 font-semibold transition-colors ${
-                            selected.locked
-                              ? 'bg-amber-500/20 text-amber-400 border border-amber-500/40'
-                              : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
-                          }`}
-                          title={selected.locked ? 'Desbloquear objeto' : 'Bloquear objeto'}
-                        >
-                          {selected.locked ? <Lock className="w-3.5 h-3.5" /> : <Unlock className="w-3.5 h-3.5" />}
-                        </button>
-                      </>
-                    )}
-                    {/* Botão de Recolher Sidebar */}
-                    <button
-                      type="button"
-                      onClick={() => setDesktopSidebarOpen(false)}
-                      className="p-1.5 rounded-md text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-colors"
-                      title="Recolher painel para liberar tela inteira"
-                    >
-                      <PanelRightClose className="w-4 h-4" />
-                    </button>
-                    {/* Fechar Seleção */}
-                    <button
-                      type="button"
-                      onClick={() => setSelectedId(null)}
-                      className="text-slate-400 hover:text-slate-200 p-1"
-                      title="Desmarcar item"
-                    >
-                      <X className="w-4 h-4" />
-                    </button>
-                  </div>
-                </div>
-
-                {/* Status de Bloqueio Alerta */}
-                {selected.locked && (
-                  <div className="p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <Lock className="w-3.5 h-3.5 shrink-0" />
-                      <span>Objeto travado contra edição</span>
-                    </div>
-                    {isAdmin && (
-                      <button
-                        type="button"
-                        onClick={toggleLockSelected}
-                        className="text-[11px] font-bold underline hover:text-amber-200"
-                      >
-                        Desbloquear
-                      </button>
-                    )}
-                  </div>
-                )}
-
-                {/* Nome / Endereço */}
-                <div>
-                  <label className="block text-[11px] text-slate-400 mb-1 font-medium">Nome / Endereço</label>
-                  <input
-                    type="text"
-                    disabled={!isAdmin || selected.locked}
-                    value={selected.name}
-                    onChange={(e) => replaceItem({ ...selected, name: e.target.value })}
-                    onPointerDown={(e) => e.stopPropagation()}
-                    onTouchStart={(e) => e.stopPropagation()}
-                    className="w-full px-2.5 py-1.5 text-xs font-semibold rounded-md border border-slate-700 bg-slate-950 text-slate-100 disabled:opacity-60"
-                  />
-                </div>
-
-                {/* Classificação & Etiquetas Dedicadas */}
-                <div className="p-3 rounded-xl border border-slate-800 bg-slate-950/60 space-y-2.5">
-                  <div className="flex items-center gap-1.5 text-xs font-bold text-orange-400">
-                    <Tag className="w-3.5 h-3.5" />
-                    <span>Classificação & Etiquetas Dedicadas</span>
-                  </div>
-
-                  {/* SKU / Código do Produto Dedicado */}
-                  <div>
-                    <label className="block text-[10px] text-slate-400 mb-0.5">Código do Produto (SKU / EAN)</label>
-                    <input
-                      type="text"
-                      disabled={!isAdmin || selected.locked}
-                      value={selected.skuCode || ''}
-                      onChange={(e) => replaceItem({ ...selected, skuCode: e.target.value.toUpperCase() })}
-                      onPointerDown={(e) => e.stopPropagation()}
-                      onTouchStart={(e) => e.stopPropagation()}
-                      placeholder="Ex: PAL-1042, SKU-ELEC-01"
-                      className="w-full px-2.5 py-1.5 text-xs font-mono font-bold rounded-md border border-slate-700 bg-slate-950 text-orange-400 disabled:opacity-60"
-                    />
-                  </div>
-
-                  {/* Porte / Tamanho do Produto */}
-                  <div>
-                    <label className="block text-[10px] text-slate-400 mb-0.5">Porte / Tamanho do Volume</label>
-                    <select
-                      disabled={!isAdmin || selected.locked}
-                      value={selected.productSize || 'pallet'}
-                      onChange={(e) => handleUpdateZoneVolumeType(e.target.value as ProductSize, selected.category)}
-                      className="w-full px-2.5 py-1.5 text-xs font-semibold rounded-md border border-slate-700 bg-slate-950 text-slate-200 disabled:opacity-60"
-                    >
-                      {PRODUCT_SIZES.map((size) => (
-                        <option key={size.id} value={size.id}>
-                          {size.icon} {size.label} — {size.desc}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  {/* Categoria do Produto */}
-                  <div>
-                    <label className="block text-[10px] text-slate-400 mb-0.5">Categoria / Setor Logístico</label>
-                    <select
-                      disabled={!isAdmin || selected.locked}
-                      value={selected.category || 'general'}
-                      onChange={(e) => handleUpdateZoneVolumeType(selected.productSize || 'pallet', e.target.value)}
-                      className="w-full px-2.5 py-1.5 text-xs font-semibold rounded-md border border-slate-700 bg-slate-950 text-slate-200 disabled:opacity-60"
-                    >
-                      {PRODUCT_CATEGORIES.map((cat) => (
-                        <option key={cat.id} value={cat.id}>
-                          {cat.label}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-
-                {/* CONTROLES TÁTEIS: Rotação Rápida & Ajuste Fino D-Pad (APENAS ADMIN) */}
-                {isAdmin && (
-                <div className="p-3 rounded-xl border border-slate-800 bg-slate-950/60 space-y-2.5">
-                  <div className="flex items-center justify-between text-xs font-bold text-slate-300">
-                    <span className="flex items-center gap-1.5">
-                      <RotateCw className="w-3.5 h-3.5 text-orange-400" />
-                      <span>Orientação & Rotação Tátil</span>
-                    </span>
-                    <span className="font-mono text-orange-400">{selected.rotation || 0}°</span>
-                  </div>
-
-                  <div className="flex gap-2">
-                    <button
-                      type="button"
-                      disabled={selected.locked}
-                      onClick={() => rotateSelectedBy(-90)}
-                      className="flex-1 py-1.5 px-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold disabled:opacity-40"
-                    >
-                      ↺ Girar 90°
-                    </button>
-                    <button
-                      type="button"
-                      disabled={selected.locked}
-                      onClick={() => rotateSelectedBy(90)}
-                      className="flex-1 py-1.5 px-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold disabled:opacity-40"
-                    >
-                      ↻ Girar 90°
-                    </button>
-                  </div>
-
-                  {/* D-Pad de Ajuste Fino de Posição (Nudge) */}
-                  <div className="pt-2 border-t border-slate-800">
-                    <span className="text-[10px] text-slate-400 block mb-1.5">Ajuste Fino de Posição (0.5m)</span>
-                    <div className="grid grid-cols-3 gap-1 max-w-[120px] mx-auto">
-                      <div />
-                      <button
-                        type="button"
-                        disabled={selected.locked}
-                        onClick={() => nudgeSelected(0, -0.5)}
-                        className="h-7 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 flex items-center justify-center disabled:opacity-40"
-                      >
-                        <ArrowUp className="w-3.5 h-3.5" />
-                      </button>
-                      <div />
-                      <button
-                        type="button"
-                        disabled={selected.locked}
-                        onClick={() => nudgeSelected(-0.5, 0)}
-                        className="h-7 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 flex items-center justify-center disabled:opacity-40"
-                      >
-                        <ArrowLeft className="w-3.5 h-3.5" />
-                      </button>
-                      <div className="flex items-center justify-center text-[9px] font-mono text-slate-500 font-bold">0.5m</div>
-                      <button
-                        type="button"
-                        disabled={selected.locked}
-                        onClick={() => nudgeSelected(0.5, 0)}
-                        className="h-7 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 flex items-center justify-center disabled:opacity-40"
-                      >
-                        <ArrowRight className="w-3.5 h-3.5" />
-                      </button>
-                      <div />
-                      <button
-                        type="button"
-                        disabled={selected.locked}
-                        onClick={() => nudgeSelected(0, 0.5)}
-                        className="h-7 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 flex items-center justify-center disabled:opacity-40"
-                      >
-                        <ArrowDown className="w-3.5 h-3.5" />
-                      </button>
-                      <div />
-                    </div>
-                  </div>
-                </div>
-                )}
-
-                {/* Ações Específicas do Espaço Selecionado */}
-                {selected.type === 'rack' ? (
-                  isAdmin ? (
-                    <button
-                      type="button"
-                      onClick={() => setModal('rack-gen')}
-                      className="w-full py-2 px-3 rounded-xl bg-orange-600/15 hover:bg-orange-600/25 border border-orange-500/40 text-orange-300 text-xs font-semibold flex items-center justify-center gap-2 transition-colors"
-                    >
-                      <BoxIcon className="w-4 h-4 text-orange-400" />
-                      <span>Configurar Estrutura de Racks</span>
-                    </button>
-                  ) : (
-                    <div className="p-3 rounded-xl border border-slate-800 bg-slate-950/60 text-xs text-slate-400">
-                      Estrutura Porta-Paletes · Consulta em modo visitante.
-                    </div>
-                  )
-                ) : selected.type === 'rectangle' ? (
-                  <div className="space-y-3">
-                    {/* Botão de Modo Foco Individual */}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (isolatedSpaceId === selected.id) {
-                          setIsolatedSpaceId(null);
-                          setToast('Modo Foco desativado');
-                        } else {
-                          setIsolatedSpaceId(selected.id);
-                          fitToElement(selected);
-                          setToast(`Modo Foco Ativo: "${selected.name}" · Demais itens bloqueados`);
-                        }
-                      }}
-                      className={`w-full py-2 px-3 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 border transition-all ${
-                        isolatedSpaceId === selected.id
-                          ? 'bg-orange-600 text-white border-orange-500 shadow-md ring-2 ring-orange-500/30'
-                          : 'bg-orange-600/15 hover:bg-orange-600/25 border-orange-500/40 text-orange-300'
-                      }`}
-                    >
-                      <Target className="w-4 h-4" />
-                      <span>
-                        {isolatedSpaceId === selected.id
-                          ? 'Sair do Modo Foco'
-                          : isAdmin
-                          ? 'Editar Espaço Individual (Modo Foco)'
-                          : 'Visualizar Espaço em Foco'}
-                      </span>
-                    </button>
-
-                    {/* GERENCIADOR DE MÓDULOS E POSIÇÕES INTERNAS DA ZONA */}
-                    <ZoneInternalPositionsManager
-                      element={selected}
-                      scaleRatio={scaleRatio}
-                      onUpdateElement={replaceItem}
-                      selectedPositionId={selectedPositionId}
-                      onSelectPosition={setSelectedPositionId}
-                      isDark={isDark}
-                      readOnly={!isAdmin}
-                    />
-
-                    {selected.groupId && (
-                      <button
-                        type="button"
-                        onClick={() => selectGroup(selected.groupId!)}
-                        className="w-full py-1.5 px-3 rounded-xl bg-blue-950/40 hover:bg-blue-900/40 border border-blue-600/40 text-blue-300 text-[11px] font-semibold flex items-center justify-center gap-1.5 transition-colors"
-                      >
-                        <Users className="w-3.5 h-3.5 text-blue-400" />
-                        <span>Selecionar Todo o Grupo ({activeArea.elements.filter(e => (e.groupId || e.id) === selected.groupId).length} espaços)</span>
-                      </button>
-                    )}
-                  </div>
-                ) : selected.type === 'corridor' ? (
-                  isAdmin ? (
-                  <div className="space-y-3.5 p-3.5 rounded-xl bg-slate-900/95 border border-sky-500/50 shadow-xl">
-                    <div className="flex items-center justify-between pb-2 border-b border-slate-800">
-                      <span className="text-xs font-bold text-sky-400 flex items-center gap-1.5">
-                        <Tag className="w-4 h-4" />
-                        <span>Edição Completa de Corredor / Rua</span>
-                      </span>
-                      <span className="text-[9px] font-mono px-2 py-0.5 rounded-full bg-sky-950 text-sky-300 font-bold border border-sky-800/60">
-                        Palavras Sem Fundo
-                      </span>
-                    </div>
-
-                    {/* Texto Principal do Corredor */}
-                    <div>
-                      <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1">
-                        Texto / Identificação
-                      </label>
-                      <input
-                        type="text"
-                        disabled={selected.locked}
-                        value={selected.corridorText || selected.name}
-                        onChange={(e) => {
-                          const text = e.target.value.toUpperCase();
-                          const fSize = selected.fontSize || 22;
-                          replaceItem({
-                            ...selected,
-                            name: text,
-                            corridorText: text,
-                            width: Math.max(120, text.length * (fSize * 0.65) + 30),
-                          });
-                        }}
-                        placeholder="Ex: RUA A, CORREDOR 01, ENTRADA"
-                        className="w-full px-3 py-2 text-xs font-mono font-bold rounded-lg border border-slate-700 bg-slate-950 text-sky-300 focus:border-sky-500 focus:outline-none"
-                      />
-                    </div>
-
-                    {/* Presets Rápidos de Nomes de Ruas & Galpão */}
-                    <div>
-                      <span className="block text-[10px] font-semibold text-slate-400 mb-1.5">Atalhos de Nomes Frequentes</span>
-                      <div className="flex flex-wrap gap-1 max-h-24 overflow-y-auto p-1 bg-slate-950/60 rounded-lg border border-slate-800">
-                        {[
-                          'RUA A', 'RUA B', 'RUA C', 'RUA D',
-                          'CORREDOR 01', 'CORREDOR 02', 'CORREDOR 03',
-                          'ENTRADA', 'SAÍDA', 'DOCA 01', 'CARRINHOS',
-                          'ALMOXARIFADO', 'EXPEDIÇÃO', 'PULMÃO'
-                        ].map((preset) => (
-                          <button
-                            key={preset}
-                            type="button"
-                            disabled={selected.locked}
-                            onClick={() => {
-                              const fSize = selected.fontSize || 22;
-                              replaceItem({
-                                ...selected,
-                                name: preset,
-                                corridorText: preset,
-                                width: Math.max(120, preset.length * (fSize * 0.65) + 30),
-                              });
-                            }}
-                            className="px-2 py-0.5 rounded text-[10px] font-mono font-semibold bg-slate-800 hover:bg-sky-600 hover:text-white text-slate-300 transition-colors disabled:opacity-40"
-                          >
-                            {preset}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
-                    {/* Símbolos & Setas de Tráfego Logístico */}
-                    <div>
-                      <span className="block text-[10px] font-semibold text-slate-400 mb-1.5">Sentido de Tráfego & Setas</span>
-                      <div className="grid grid-cols-4 gap-1">
-                        {[
-                          { symbol: '➔', label: 'Frente' },
-                          { symbol: '⬅', label: 'Retorno' },
-                          { symbol: '⬆', label: 'Subida' },
-                          { symbol: '⬇', label: 'Descida' },
-                          { symbol: '↔', label: 'Duplo' },
-                          { symbol: '🔄', label: 'Giro' },
-                          { symbol: '🚷', label: 'Sem Pedestre' },
-                        ].map((item) => (
-                          <button
-                            key={item.symbol}
-                            type="button"
-                            disabled={selected.locked}
-                            onClick={() => {
-                              const current = selected.corridorText || selected.name || '';
-                              if (current.includes(item.symbol)) return;
-                              const updated = `${item.symbol} ${current}`;
-                              const fSize = selected.fontSize || 22;
-                              replaceItem({
-                                ...selected,
-                                name: updated,
-                                corridorText: updated,
-                                width: Math.max(120, updated.length * (fSize * 0.65) + 30),
-                              });
-                            }}
-                            className="p-1.5 rounded-lg bg-slate-950 border border-slate-800 hover:border-sky-500 text-sky-300 font-bold text-xs flex items-center justify-center gap-1 disabled:opacity-40"
-                            title={`Adicionar ${item.label}`}
-                          >
-                            <span className="text-sm">{item.symbol}</span>
-                            <span className="text-[9px] text-slate-400 font-normal">{item.label}</span>
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
-                    {/* Ajustes de Fonte, Espaçamento & Peso */}
-                    <div className="space-y-2 pt-2 border-t border-slate-800">
-                      <div className="grid grid-cols-2 gap-2">
-                        <div>
-                          <div className="flex justify-between items-center mb-1">
-                            <span className="text-[10px] text-slate-400">Tamanho da Fonte</span>
-                            <span className="font-mono text-xs font-bold text-sky-300">{selected.fontSize || 22}px</span>
-                          </div>
-                          <input
-                            type="range"
-                            min="12"
-                            max="96"
-                            disabled={selected.locked}
-                            value={selected.fontSize || 22}
-                            onChange={(e) => {
-                              const size = parseInt(e.target.value, 10);
-                              const currentText = selected.corridorText || selected.name || '';
-                              replaceItem({
-                                ...selected,
-                                fontSize: size,
-                                height: Math.max(30, size * 1.5),
-                                width: Math.max(120, currentText.length * (size * 0.65) + 30),
-                              });
-                            }}
-                            className="w-full accent-sky-500"
-                          />
-                        </div>
-
-                        <div>
-                          <div className="flex justify-between items-center mb-1">
-                            <span className="text-[10px] text-slate-400">Espaçamento</span>
-                            <span className="font-mono text-xs font-bold text-sky-300">{selected.letterSpacing ?? 4}px</span>
-                          </div>
-                          <input
-                            type="range"
-                            min="0"
-                            max="24"
-                            disabled={selected.locked}
-                            value={selected.letterSpacing ?? 4}
-                            onChange={(e) => {
-                              const sp = parseInt(e.target.value, 10);
-                              replaceItem({ ...selected, letterSpacing: sp });
-                            }}
-                            className="w-full accent-sky-500"
-                          />
-                        </div>
-                      </div>
-
-                      {/* Espessura da Fonte */}
-                      <div>
-                        <span className="block text-[10px] text-slate-400 mb-1 font-semibold">Peso / Espessura da Letra</span>
-                        <div className="grid grid-cols-3 gap-1">
-                          {[
-                            { value: 'normal', label: 'Normal' },
-                            { value: 'bold', label: 'Negrito' },
-                            { value: 'extrabold', label: 'Extra Pesado' },
-                          ].map((weight) => (
-                            <button
-                              key={weight.value}
-                              type="button"
-                              disabled={selected.locked}
-                              onClick={() => replaceItem({ ...selected, fontWeight: weight.value as any })}
-                              className={`py-1 rounded-md text-[11px] font-semibold border transition-colors ${
-                                (selected.fontWeight || 'extrabold') === weight.value
-                                  ? 'bg-sky-950 border-sky-500 text-sky-200 font-bold'
-                                  : 'bg-slate-950 border-slate-800 text-slate-400'
-                              }`}
-                            >
-                              {weight.label}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Orientação e Rotação */}
-                    <div className="pt-2 border-t border-slate-800">
-                      <div className="flex items-center justify-between mb-1.5">
-                        <span className="text-[10px] font-semibold text-slate-400">Orientação & Ângulo</span>
-                        <span className="font-mono text-xs font-bold text-sky-400">{selected.rotation || 0}°</span>
-                      </div>
-                      <div className="grid grid-cols-4 gap-1">
-                        {[0, 90, 180, 270].map((deg) => (
-                          <button
-                            key={deg}
-                            type="button"
-                            disabled={selected.locked}
-                            onClick={() => replaceItem({ ...selected, rotation: deg })}
-                            className={`py-1.5 rounded-lg text-xs font-mono font-semibold border flex items-center justify-center ${
-                              (selected.rotation || 0) === deg
-                                ? 'bg-sky-950 border-sky-500 text-sky-200 font-bold shadow-sm'
-                                : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200'
-                            }`}
-                          >
-                            {deg}°
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
-                    {/* Cores Especiais de Texto Sem Fundo */}
-                    <div className="pt-2 border-t border-slate-800">
-                      <span className="block text-[10px] font-semibold text-slate-400 mb-1.5">Cor da Palavra (Alta Visibilidade)</span>
-                      <div className="grid grid-cols-4 gap-1.5">
-                        {[
-                          { value: '#ffffff', label: 'Branco' },
-                          { value: '#38bdf8', label: 'Azul' },
-                          { value: '#facc15', label: 'Amarelo' },
-                          { value: '#10b981', label: 'Verde' },
-                          { value: '#f97316', label: 'Laranja' },
-                          { value: '#ef4444', label: 'Vermelho' },
-                          { value: '#c084fc', label: 'Roxo' },
-                          { value: '#22d3ee', label: 'Ciano' },
-                        ].map((c) => (
-                          <button
-                            key={c.value}
-                            type="button"
-                            disabled={selected.locked}
-                            onClick={() => replaceItem({ ...selected, color: c.value })}
-                            title={c.label}
-                            style={{ backgroundColor: c.value }}
-                            className={`h-7 rounded-md transition-transform flex items-center justify-center text-[10px] font-bold ${
-                              ['#ffffff', '#facc15', '#22d3ee', '#38bdf8'].includes(c.value) ? 'text-black' : 'text-white'
-                            } ${
-                              (selected.color || '#ffffff').toLowerCase() === c.value.toLowerCase()
-                                ? 'ring-2 ring-sky-400 scale-105'
-                                : 'opacity-85 hover:opacity-100'
-                            } disabled:opacity-40`}
-                          >
-                            {c.label}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                  ) : (
-                    <div className="p-3 rounded-xl bg-slate-950/70 border border-sky-500/30 text-xs text-sky-300 font-mono">
-                      Corredor / Rua: {selected.corridorText || selected.name}
-                    </div>
-                  )
-                ) : null}
-
-                {/* Cores Setoriais (APENAS ADMIN) */}
-                {isAdmin && (
-                <div>
-                  <label className="block text-[11px] text-slate-400 mb-1.5 font-medium">Cor Setorial</label>
-                  <div className="grid grid-cols-4 gap-1.5">
-                    {WMS_COLOR_PALETTE.map((c) => (
-                      <button
-                        key={c.value}
-                        type="button"
-                        disabled={selected.locked}
-                        onClick={() => replaceItem({ ...selected, color: c.value })}
-                        title={c.name}
-                        style={{ backgroundColor: c.value }}
-                        className={`h-7 rounded-md transition-transform ${
-                          (selected.color || '#f97316').toLowerCase() === c.value.toLowerCase()
-                            ? 'ring-2 ring-white scale-105'
-                            : 'opacity-85 hover:opacity-100'
-                        } disabled:opacity-40`}
-                      />
-                    ))}
-                  </div>
-                </div>
-                )}
-              </div>
-
-              {/* Duplicar & Excluir (APENAS ADMIN) */}
-              {isAdmin && (
-              <div className="pt-3 border-t border-slate-800 mt-4 flex gap-2">
-                <button
-                  type="button"
-                  onClick={duplicateSelected}
-                  className="flex-1 flex items-center justify-center gap-1.5 px-2 py-2 rounded-lg text-slate-300 bg-slate-800 hover:bg-slate-700 text-xs font-medium"
-                >
-                  <Copy className="w-3.5 h-3.5" />
-                  <span>Duplicar</span>
-                </button>
-                <button
-                  type="button"
-                  disabled={selected.locked}
-                  onClick={() => setModal('delete')}
-                  className="flex items-center justify-center p-2 rounded-lg text-rose-400 bg-rose-500/10 hover:bg-rose-500/20 text-xs disabled:opacity-40"
-                  title="Excluir"
-                >
-                  <Trash2 className="w-4 h-4" />
-                </button>
-              </div>
-              )}
+              <SelectionInspector
+                selected={selected}
+                selectedIds={selectedIds}
+                selectedElements={selectedElements}
+                allElements={activeArea.elements}
+                scaleRatio={scaleRatio}
+                worldWidth={worldWidth}
+                worldHeight={worldHeight}
+                selectedPositionId={selectedPositionId}
+                isolatedSpaceId={isolatedSpaceId}
+                isDark={isDark}
+                isAdmin={isAdmin}
+                onReplaceItem={replaceItem}
+                onPatchElements={(mapper, toastMsg) => {
+                  patchActive((a) => ({ ...a, elements: mapper(a.elements) }));
+                  if (toastMsg) setToast(toastMsg);
+                }}
+                onSelectPosition={setSelectedPositionId}
+                onUpdateZoneVolumeType={handleUpdateZoneVolumeType}
+                onToggleLock={toggleLockSelected}
+                onRotateBy={rotateSelectedBy}
+                onNudge={nudgeSelected}
+                onDuplicate={duplicateSelected}
+                onRequestDelete={() => setModal('delete')}
+                onOpenRackModal={() => setModal('rack-gen')}
+                onToggleIsolate={(el) => {
+                  if (isolatedSpaceId === el.id) {
+                    setIsolatedSpaceId(null);
+                    setToast('Modo Foco desativado');
+                  } else {
+                    setIsolatedSpaceId(el.id);
+                    fitToElement(el);
+                    setToast(`Modo Foco Ativo: "${el.name}"`);
+                  }
+                }}
+                onSelectGroup={selectGroup}
+                onClearSelection={() => setSelectedId(null)}
+                onEnterFreeMove={() => setFreeMoveMode(true)}
+                onCollapseDesktop={() => setDesktopSidebarOpen(false)}
+                onRequestLogin={() => setModal('auth')}
+                onCreateGroupId={() => createId('group')}
+              />
             </aside>
 
-            {/* MOBILE BOTTOM SHEET DRAWER (<MD) */}
+            {/* MOBILE BOTTOM SHEET DRAWER (<MD) ENXUTO E DINÂMICO */}
             <div
               onPointerDown={(e) => e.stopPropagation()}
               onTouchStart={(e) => e.stopPropagation()}
-              className={`md:hidden fixed bottom-14 left-0 right-0 z-30 transition-all duration-200 ease-out border-t shadow-2xl ${
+              className={`md:hidden fixed bottom-14 left-0 right-0 z-30 transition-all duration-200 ease-out border-t shadow-2xl rounded-t-2xl overflow-hidden ${
                 isDark ? 'bg-slate-900 border-slate-700/80 text-slate-100' : 'bg-white border-slate-300 text-slate-900'
               } ${
                 isDragging || freeMoveMode
                   ? 'translate-y-full opacity-0 pointer-events-none'
                   : mobileDrawerOpen
                   ? 'translate-y-0 opacity-100'
-                  : 'translate-y-[calc(100%-42px)] opacity-100'
+                  : 'translate-y-[calc(100%-44px)] opacity-100'
               }`}
             >
-              {/* Barra de Puxar da Gaveta */}
+              {/* Barra de Puxar da Gaveta Mobile */}
               <div
                 onClick={() => setMobileDrawerOpen((prev) => !prev)}
-                className="h-10 flex items-center justify-between px-3 cursor-pointer border-b border-slate-800/40 bg-slate-950/70"
+                className={`h-11 flex items-center justify-between px-3 cursor-pointer border-b ${
+                  isDark ? 'border-slate-800/70 bg-slate-950/75' : 'border-slate-200 bg-slate-50'
+                }`}
               >
                 <div className="flex items-center gap-2 min-w-0">
-                  <div className="w-3 h-3 rounded-xs shrink-0" style={{ backgroundColor: selected.color || '#f97316' }} />
-                  <span className="text-xs font-bold truncate max-w-[120px]">{selected.name}</span>
+                  <div className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: selected.color || '#f97316' }} />
+                  <span className="text-xs font-bold truncate max-w-[135px]">{selected.name}</span>
                   {selected.locked && (
-                    <span className="px-1.5 py-0.2 rounded text-[10px] bg-amber-500/20 text-amber-300 font-mono font-bold flex items-center gap-0.5 shrink-0">
-                      🔒
-                    </span>
+                    <Lock className="w-3 h-3 text-amber-400 shrink-0" />
                   )}
                 </div>
-                <div className="flex items-center gap-1.5 shrink-0">
+                <div className="flex items-center gap-1 shrink-0">
                   {isAdmin && (
                     <>
-                      {/* Botão Mover Livre no Mobile */}
                       <button
                         type="button"
                         onClick={(e) => {
                           e.stopPropagation();
                           setFreeMoveMode(true);
-                          setToast('Modo Movimentação Livre Ativado: Tela limpa para posicionar o item.');
+                          setToast('Modo Movimentação Livre Ativado');
                         }}
-                        className="px-2 py-1 rounded-md text-[11px] font-bold text-orange-400 bg-orange-600/20 border border-orange-500/40 flex items-center gap-1"
-                        title="Minimizar para tela limpa com micro-painel flutuante"
+                        className="px-2 py-1 rounded-lg text-[11px] font-bold text-orange-400 bg-orange-500/15 border border-orange-500/35 flex items-center gap-1"
+                        title="Mover livremente no mapa"
                       >
                         <Move className="w-3 h-3" />
-                        <span>Mover Livre</span>
+                        <span>Mover</span>
                       </button>
                       <button
                         type="button"
@@ -3731,8 +3297,12 @@ export default function Editor() {
                           e.stopPropagation();
                           toggleLockSelected();
                         }}
-                        className={`p-1.5 rounded-md text-xs font-bold ${
-                          selected.locked ? 'text-amber-400 bg-amber-500/20' : 'text-slate-400 bg-slate-800'
+                        className={`p-1.5 rounded-lg text-xs font-bold ${
+                          selected.locked
+                            ? 'text-amber-400 bg-amber-500/20'
+                            : isDark
+                            ? 'text-slate-400 bg-slate-800'
+                            : 'text-slate-500 bg-slate-200'
                         }`}
                       >
                         {selected.locked ? <Lock className="w-3.5 h-3.5" /> : <Unlock className="w-3.5 h-3.5" />}
@@ -3743,389 +3313,71 @@ export default function Editor() {
                     type="button"
                     onClick={(e) => {
                       e.stopPropagation();
+                      setMobileDrawerOpen((prev) => !prev);
+                    }}
+                    className={`p-1 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}
+                    title={mobileDrawerOpen ? 'Recolher' : 'Expandir'}
+                  >
+                    {mobileDrawerOpen ? <ChevronDown className="w-4 h-4" /> : <ChevronUp className="w-4 h-4" />}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
                       setSelectedId(null);
                     }}
-                    className="p-1 text-slate-400 hover:text-slate-200 ml-1"
+                    className={`p-1 ${isDark ? 'text-slate-400 hover:text-slate-200' : 'text-slate-500 hover:text-slate-900'}`}
+                    title="Fechar seleção"
                   >
                     <X className="w-4 h-4" />
                   </button>
                 </div>
               </div>
 
-              {/* Conteúdo da Gaveta Mobile */}
-              <div className="p-3 max-h-[70vh] sm:max-h-[50vh] overflow-y-auto overscroll-contain space-y-3">
-                {!isAdmin && (
-                  <ReadOnlyNoticeBanner
-                    isDark={isDark}
-                    onRequestLogin={() => setModal('auth')}
-                  />
-                )}
-
-                {/* Atalho Rápido para Liberar Visão do Mapa */}
-                {isAdmin && (
-                <div className="flex items-center justify-between p-2 rounded-xl bg-orange-600/15 border border-orange-500/30 text-xs">
-                  <div className="flex items-center gap-1.5 text-orange-300 font-bold">
-                    <Move className="w-3.5 h-3.5 text-orange-400" />
-                    <span>Mover livremente sem o menu na frente:</span>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setFreeMoveMode(true);
-                      setToast('Modo Movimentação Livre Ativado.');
-                    }}
-                    className="px-2.5 py-1 rounded-lg bg-orange-600 hover:bg-orange-500 text-white font-bold text-xs shadow-sm"
-                  >
-                    Ativar
-                  </button>
-                </div>
-                )}
-                {/* Nome */}
-                <div>
-                  <input
-                    type="text"
-                    disabled={!isAdmin || selected.locked}
-                    value={selected.name}
-                    onChange={(e) => replaceItem({ ...selected, name: e.target.value })}
-                    onPointerDown={(e) => e.stopPropagation()}
-                    onTouchStart={(e) => e.stopPropagation()}
-                    className="w-full px-2.5 py-1.5 text-xs font-semibold rounded-md border border-slate-700 bg-slate-950 text-slate-100 disabled:opacity-60"
-                    placeholder="Nome do elemento"
-                  />
-                </div>
-
-                {/* Classificação Dedicada no Mobile */}
-                <div className="grid grid-cols-2 gap-2 text-xs">
-                  <div>
-                    <label className="block text-[10px] text-slate-400 mb-0.5">Código SKU</label>
-                    <input
-                      type="text"
-                      disabled={!isAdmin || selected.locked}
-                      value={selected.skuCode || ''}
-                      onChange={(e) => replaceItem({ ...selected, skuCode: e.target.value.toUpperCase() })}
-                      onPointerDown={(e) => e.stopPropagation()}
-                      onTouchStart={(e) => e.stopPropagation()}
-                      placeholder="Ex: SKU-101"
-                      className="w-full px-2 py-1 text-xs font-mono font-bold rounded-md border border-slate-700 bg-slate-950 text-orange-400 disabled:opacity-60"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[10px] text-slate-400 mb-0.5">Porte do Volume</label>
-                    <select
-                      disabled={!isAdmin || selected.locked}
-                      value={selected.productSize || 'medium_box'}
-                      onChange={(e) => replaceItem({ ...selected, productSize: e.target.value as ProductSize })}
-                      onPointerDown={(e) => e.stopPropagation()}
-                      onTouchStart={(e) => e.stopPropagation()}
-                      className="w-full px-2 py-1 text-xs font-semibold rounded-md border border-slate-700 bg-slate-950 text-slate-200 disabled:opacity-60"
-                    >
-                      {PRODUCT_SIZES.map((size) => (
-                        <option key={size.id} value={size.id}>
-                          {size.icon} {size.short}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-
-                {/* ROTAÇÃO TÁTIL E D-PAD MOBILE (APENAS ADMIN) */}
-                {isAdmin && (
-                <div className="p-2.5 rounded-xl border border-slate-800 bg-slate-950 space-y-2">
-                  <div className="flex items-center justify-between text-xs font-bold text-slate-300">
-                    <span>Girar Objeto:</span>
-                    <div className="flex items-center gap-1.5">
-                      <button
-                        type="button"
-                        disabled={selected.locked}
-                        onClick={() => rotateSelectedBy(-90)}
-                        className="px-2 py-1 rounded bg-slate-800 text-xs text-slate-200 font-bold disabled:opacity-40"
-                      >
-                        ↺ -90°
-                      </button>
-                      <button
-                        type="button"
-                        disabled={selected.locked}
-                        onClick={() => rotateSelectedBy(90)}
-                        className="px-2 py-1 rounded bg-slate-800 text-xs text-slate-200 font-bold disabled:opacity-40"
-                      >
-                        ↻ +90°
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Nudge D-pad */}
-                  <div className="flex items-center justify-between pt-1 border-t border-slate-800">
-                    <span className="text-[10px] text-slate-400">Mover com Toque:</span>
-                    <div className="flex items-center gap-1">
-                      <button
-                        type="button"
-                        disabled={selected.locked}
-                        onClick={() => nudgeSelected(-0.5, 0)}
-                        className="w-7 h-7 rounded bg-slate-800 text-slate-200 flex items-center justify-center font-bold"
-                      >
-                        ←
-                      </button>
-                      <button
-                        type="button"
-                        disabled={selected.locked}
-                        onClick={() => nudgeSelected(0, -0.5)}
-                        className="w-7 h-7 rounded bg-slate-800 text-slate-200 flex items-center justify-center font-bold"
-                      >
-                        ↑
-                      </button>
-                      <button
-                        type="button"
-                        disabled={selected.locked}
-                        onClick={() => nudgeSelected(0, 0.5)}
-                        className="w-7 h-7 rounded bg-slate-800 text-slate-200 flex items-center justify-center font-bold"
-                      >
-                        ↓
-                      </button>
-                      <button
-                        type="button"
-                        disabled={selected.locked}
-                        onClick={() => nudgeSelected(0.5, 0)}
-                        className="w-7 h-7 rounded bg-slate-800 text-slate-200 flex items-center justify-center font-bold"
-                      >
-                        →
-                      </button>
-                    </div>
-                  </div>
-                </div>
-                )}
-
-                {/* Ações Especiais Mobile */}
-                {selected.type === 'rack' ? (
-                  isAdmin ? (
-                    <button
-                      type="button"
-                      onClick={() => setModal('rack-gen')}
-                      className="w-full py-2 px-3 rounded-xl bg-orange-600/15 border border-orange-500/40 text-orange-300 text-xs font-semibold flex items-center justify-center gap-2"
-                    >
-                      <BoxIcon className="w-4 h-4 text-orange-400" />
-                      <span>Configurar Estrutura de Racks</span>
-                    </button>
-                  ) : null
-                ) : selected.type === 'rectangle' ? (
-                  <div className="space-y-2.5">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (isolatedSpaceId === selected.id) {
-                          setIsolatedSpaceId(null);
-                          setToast('Modo Foco desativado');
-                        } else {
-                          setIsolatedSpaceId(selected.id);
-                          fitToElement(selected);
-                          setToast(`Modo Foco Ativo: "${selected.name}" · Demais itens bloqueados`);
-                        }
-                      }}
-                      className={`w-full py-2 px-3 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 border transition-all ${
-                        isolatedSpaceId === selected.id
-                          ? 'bg-orange-600 text-white border-orange-500 shadow-md ring-2 ring-orange-500/30'
-                          : 'bg-orange-600/20 text-orange-400 border border-orange-500/50'
-                      }`}
-                    >
-                      <Target className="w-4 h-4" />
-                      <span>
-                        {isolatedSpaceId === selected.id
-                          ? 'Sair do Modo Foco'
-                          : isAdmin
-                          ? 'Editar Espaço Individual (Modo Foco)'
-                          : 'Visualizar Espaço em Foco'}
-                      </span>
-                    </button>
-
-                    {/* GERENCIADOR DE MÓDULOS E POSIÇÕES INTERNAS DA ZONA NO MOBILE */}
-                    <ZoneInternalPositionsManager
-                      element={selected}
-                      scaleRatio={scaleRatio}
-                      onUpdateElement={replaceItem}
-                      selectedPositionId={selectedPositionId}
-                      onSelectPosition={setSelectedPositionId}
-                      isDark={isDark}
-                      readOnly={!isAdmin}
-                    />
-
-                    {selected.groupId && (
-                      <button
-                        type="button"
-                        onClick={() => selectGroup(selected.groupId!)}
-                        className="w-full py-1.5 px-3 rounded-xl bg-blue-950/40 border border-blue-600/40 text-blue-300 text-[11px] font-semibold flex items-center justify-center gap-1.5"
-                      >
-                        <Users className="w-3.5 h-3.5 text-blue-400" />
-                        <span>Selecionar Todo o Grupo ({activeArea.elements.filter(e => (e.groupId || e.id) === selected.groupId).length} espaços)</span>
-                      </button>
-                    )}
-                  </div>
-                ) : selected.type === 'corridor' ? (
-                  isAdmin ? (
-                  <div className="space-y-3 p-3 rounded-xl bg-slate-950 border border-sky-500/40">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-bold text-sky-400 flex items-center gap-1">
-                        <Tag className="w-3.5 h-3.5" />
-                        <span>Edição de Corredor / Rua</span>
-                      </span>
-                      <span className="text-[9px] font-mono text-sky-300">Sem Background</span>
-                    </div>
-
-                    <div>
-                      <label className="block text-[10px] text-slate-400 mb-0.5">Identificação</label>
-                      <input
-                        type="text"
-                        disabled={selected.locked}
-                        value={selected.corridorText || selected.name}
-                        onChange={(e) => {
-                          const text = e.target.value.toUpperCase();
-                          const fSize = selected.fontSize || 22;
-                          replaceItem({
-                            ...selected,
-                            name: text,
-                            corridorText: text,
-                            width: Math.max(120, text.length * (fSize * 0.65) + 30),
-                          });
-                        }}
-                        className="w-full px-2.5 py-1.5 text-xs font-mono font-bold rounded bg-slate-900 border border-slate-700 text-sky-300"
-                        placeholder="Ex: RUA A, CORREDOR 01"
-                      />
-                    </div>
-
-                    {/* Presets Rápidos Mobile */}
-                    <div className="flex flex-wrap gap-1 max-h-20 overflow-y-auto">
-                      {['RUA A', 'RUA B', 'RUA C', 'CORREDOR 01', 'CORREDOR 02', 'ENTRADA', 'SAÍDA', 'DOCA 01'].map((preset) => (
-                        <button
-                          key={preset}
-                          type="button"
-                          disabled={selected.locked}
-                          onClick={() => {
-                            const fSize = selected.fontSize || 22;
-                            replaceItem({
-                              ...selected,
-                              name: preset,
-                              corridorText: preset,
-                              width: Math.max(120, preset.length * (fSize * 0.65) + 30),
-                            });
-                          }}
-                          className="px-2 py-0.5 rounded text-[10px] font-mono bg-slate-800 text-slate-300 hover:text-white"
-                        >
-                          {preset}
-                        </button>
-                      ))}
-                    </div>
-
-                    {/* Setas de Tráfego Mobile */}
-                    <div className="grid grid-cols-4 gap-1">
-                      {['➔', '⬅', '⬆', '⬇', '↔', '🔄', '🚷'].map((sym) => (
-                        <button
-                          key={sym}
-                          type="button"
-                          disabled={selected.locked}
-                          onClick={() => {
-                            const current = selected.corridorText || selected.name || '';
-                            if (current.includes(sym)) return;
-                            const updated = `${sym} ${current}`;
-                            const fSize = selected.fontSize || 22;
-                            replaceItem({
-                              ...selected,
-                              name: updated,
-                              corridorText: updated,
-                              width: Math.max(120, updated.length * (fSize * 0.65) + 30),
-                            });
-                          }}
-                          className="p-1 rounded bg-slate-900 border border-slate-800 text-sky-300 font-bold text-xs"
-                        >
-                          {sym}
-                        </button>
-                      ))}
-                    </div>
-
-                    {/* Tamanho da fonte e espaçamento */}
-                    <div className="grid grid-cols-2 gap-2 text-[10px]">
-                      <div>
-                        <span className="text-slate-400">Fonte: {selected.fontSize || 22}px</span>
-                        <input
-                          type="range"
-                          min="12"
-                          max="80"
-                          disabled={selected.locked}
-                          value={selected.fontSize || 22}
-                          onChange={(e) => {
-                            const size = parseInt(e.target.value, 10);
-                            const currentText = selected.corridorText || selected.name || '';
-                            replaceItem({
-                              ...selected,
-                              fontSize: size,
-                              height: Math.max(30, size * 1.5),
-                              width: Math.max(120, currentText.length * (size * 0.65) + 30),
-                            });
-                          }}
-                          className="w-full accent-sky-500"
-                        />
-                      </div>
-                      <div>
-                        <span className="text-slate-400">Espaço: {selected.letterSpacing ?? 4}px</span>
-                        <input
-                          type="range"
-                          min="0"
-                          max="20"
-                          disabled={selected.locked}
-                          value={selected.letterSpacing ?? 4}
-                          onChange={(e) => {
-                            const sp = parseInt(e.target.value, 10);
-                            replaceItem({ ...selected, letterSpacing: sp });
-                          }}
-                          className="w-full accent-sky-500"
-                        />
-                      </div>
-                    </div>
-                  </div>
-                  ) : (
-                    <div className="p-3 rounded-xl bg-slate-950 border border-sky-500/30 text-xs text-sky-300 font-mono">
-                      Corredor / Rua: {selected.corridorText || selected.name}
-                    </div>
-                  )
-                ) : null}
-
-                {/* Cores Setoriais no Mobile (APENAS ADMIN) */}
-                {isAdmin && (
-                <div className="flex items-center gap-2 overflow-x-auto pb-1">
-                  {WMS_COLOR_PALETTE.map((c) => (
-                    <button
-                      key={c.value}
-                      type="button"
-                      disabled={selected.locked}
-                      onClick={() => replaceItem({ ...selected, color: c.value })}
-                      style={{ backgroundColor: c.value }}
-                      className={`w-7 h-7 rounded-md shrink-0 ${
-                        (selected.color || '#f97316').toLowerCase() === c.value.toLowerCase() ? 'ring-2 ring-white scale-105' : 'opacity-80'
-                      } disabled:opacity-40`}
-                    />
-                  ))}
-                </div>
-                )}
-
-                {/* Duplicar & Excluir Mobile (APENAS ADMIN) */}
-                {isAdmin && (
-                <div className="flex items-center gap-2 pt-1 border-t border-slate-800">
-                  <button
-                    type="button"
-                    onClick={duplicateSelected}
-                    className="flex-1 py-1.5 rounded-md bg-slate-800 text-xs font-medium text-slate-300 flex items-center justify-center gap-1"
-                  >
-                    <Copy className="w-3.5 h-3.5" />
-                    <span>Duplicar</span>
-                  </button>
-                  <button
-                    type="button"
-                    disabled={selected.locked}
-                    onClick={() => setModal('delete')}
-                    className="py-1.5 px-3 rounded-md bg-rose-500/15 text-rose-400 text-xs font-medium flex items-center justify-center gap-1 disabled:opacity-40"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                    <span>Excluir</span>
-                  </button>
-                </div>
-                )}
+              {/* Conteúdo Unificado da Gaveta Mobile */}
+              <div className="p-3 max-h-[65vh] sm:max-h-[50vh] overflow-y-auto overscroll-contain">
+                <SelectionInspector
+                  selected={selected}
+                  selectedIds={selectedIds}
+                  selectedElements={selectedElements}
+                  allElements={activeArea.elements}
+                  scaleRatio={scaleRatio}
+                  worldWidth={worldWidth}
+                  worldHeight={worldHeight}
+                  selectedPositionId={selectedPositionId}
+                  isolatedSpaceId={isolatedSpaceId}
+                  isDark={isDark}
+                  isAdmin={isAdmin}
+                  isMobile
+                  onReplaceItem={replaceItem}
+                  onPatchElements={(mapper, toastMsg) => {
+                    patchActive((a) => ({ ...a, elements: mapper(a.elements) }));
+                    if (toastMsg) setToast(toastMsg);
+                  }}
+                  onSelectPosition={setSelectedPositionId}
+                  onUpdateZoneVolumeType={handleUpdateZoneVolumeType}
+                  onToggleLock={toggleLockSelected}
+                  onRotateBy={rotateSelectedBy}
+                  onNudge={nudgeSelected}
+                  onDuplicate={duplicateSelected}
+                  onRequestDelete={() => setModal('delete')}
+                  onOpenRackModal={() => setModal('rack-gen')}
+                  onToggleIsolate={(el) => {
+                    if (isolatedSpaceId === el.id) {
+                      setIsolatedSpaceId(null);
+                      setToast('Modo Foco desativado');
+                    } else {
+                      setIsolatedSpaceId(el.id);
+                      fitToElement(el);
+                      setToast(`Modo Foco Ativo: "${el.name}"`);
+                    }
+                  }}
+                  onSelectGroup={selectGroup}
+                  onClearSelection={() => setSelectedId(null)}
+                  onEnterFreeMove={() => setFreeMoveMode(true)}
+                  onRequestLogin={() => setModal('auth')}
+                  onCreateGroupId={() => createId('group')}
+                />
               </div>
             </div>
 
@@ -4401,6 +3653,29 @@ export default function Editor() {
                   </span>
                 </div>
 
+                {isAdmin && auth.isConfigured && sharedMap.hasUnsavedChanges && (
+                  <button
+                    type="button"
+                    disabled={sharedMap.syncStatus === 'syncing'}
+                    onClick={() => {
+                      setMobileMenuOpen(false);
+                      void sharedMap.flushSaveToCloud();
+                    }}
+                    className="w-full py-2 px-3 rounded-lg bg-amber-500 hover:bg-amber-400 disabled:opacity-60 text-slate-950 font-bold flex items-center justify-center gap-2"
+                  >
+                    {sharedMap.syncStatus === 'syncing' ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <UploadCloud className="w-4 h-4" />
+                    )}
+                    <span>
+                      {sharedMap.syncStatus === 'syncing'
+                        ? 'Salvando alterações na nuvem...'
+                        : 'Salvar Alterações na Nuvem'}
+                    </span>
+                  </button>
+                )}
+
                 <div className="grid grid-cols-2 gap-1.5">
                   <button
                     type="button"
@@ -4521,18 +3796,29 @@ export default function Editor() {
                         type="button"
                         onClick={() => {
                           setMobileMenuOpen(false);
-                          setModal('rename');
+                          openWarehouseManager('list');
                         }}
-                        className="p-2 rounded-lg bg-slate-800 text-slate-300 font-medium flex items-center justify-center gap-1.5"
+                        className="col-span-2 p-2.5 rounded-xl bg-slate-800/90 hover:bg-slate-800 text-slate-100 font-semibold flex items-center justify-center gap-2 border border-slate-700/80"
                       >
-                        <Pencil className="w-3.5 h-3.5 text-slate-400" />
-                        <span>Renomear</span>
+                        <Warehouse className="w-4 h-4 text-orange-400" />
+                        <span>Gerenciar Galpões (Criar / Editar / Excluir)</span>
                       </button>
                       <button
                         type="button"
                         onClick={() => {
                           setMobileMenuOpen(false);
-                          createNewArea();
+                          openWarehouseManager('edit', activeArea.id);
+                        }}
+                        className="p-2 rounded-lg bg-slate-800 text-slate-300 font-medium flex items-center justify-center gap-1.5"
+                      >
+                        <Pencil className="w-3.5 h-3.5 text-orange-400" />
+                        <span>Editar Galpão</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setMobileMenuOpen(false);
+                          openWarehouseManager('create');
                         }}
                         className="p-2 rounded-lg bg-slate-800 text-slate-300 font-medium flex items-center justify-center gap-1.5"
                       >
@@ -4597,6 +3883,27 @@ export default function Editor() {
         scaleRatio={scaleRatio}
         camera={camera}
         canvasSize={canvasSize}
+        isDark={isDark}
+      />
+
+      {/* MODAL: GERENCIAR GALPÕES / BARRACÕES (CRIAR, EDITAR E EXCLUIR - APENAS ADMIN) */}
+      <WarehouseManagerDialog
+        isOpen={isAdmin && modal === 'warehouses'}
+        onClose={() => setModal(null)}
+        areas={areas}
+        activeAreaId={activeId}
+        initialMode={warehouseManagerMode}
+        initialEditAreaId={warehouseManagerEditId}
+        onSelectArea={(id) => {
+          setActiveId(id);
+          setSelectedId(null);
+          setSelectedPositionId(null);
+          setHighlightId(null);
+          setIsolatedSpaceId(null);
+        }}
+        onCreateArea={handleCreateWarehouse}
+        onUpdateArea={handleUpdateWarehouse}
+        onDeleteArea={handleDeleteWarehouse}
         isDark={isDark}
       />
 
@@ -4874,6 +4181,7 @@ export default function Editor() {
         }}
         onReloadRemote={() => sharedMap.resolveConflictReloadRemote()}
         onPublishLocalDraft={() => sharedMap.resolveConflictPublishLocalDraft()}
+        onDismiss={() => sharedMap.dismissConflict()}
       />
 
       {/* TELA DE CARREGAMENTO LENTA COM LOGOTIPO MOVARE */}

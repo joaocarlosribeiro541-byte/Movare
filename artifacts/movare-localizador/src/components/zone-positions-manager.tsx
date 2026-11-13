@@ -342,6 +342,9 @@ export function ZoneInternalPositionsManager({
     handleUpdatePosition(posId, {
       sku: element.skuCode || '',
       description: element.notes || element.name,
+      model: element.model || '',
+      supplier: element.supplier || '',
+      volumesPerItem: element.volumesPerItem,
       status: element.skuCode ? 'occupied' : 'empty',
       productSize: element.productSize,
       category: element.category,
@@ -365,6 +368,8 @@ export function ZoneInternalPositionsManager({
         p.code.toLowerCase().includes(q) ||
         (p.sku && p.sku.toLowerCase().includes(q)) ||
         (p.label && p.label.toLowerCase().includes(q)) ||
+        (p.model && p.model.toLowerCase().includes(q)) ||
+        (p.supplier && p.supplier.toLowerCase().includes(q)) ||
         (p.description && p.description.toLowerCase().includes(q))
       );
     });
@@ -950,6 +955,54 @@ export function ZoneInternalPositionsManager({
                     />
                   </div>
 
+                  <div className="grid grid-cols-3 gap-2">
+                    <div>
+                      <label className="block text-[10px] font-semibold text-slate-300 mb-0.5">
+                        Modelo
+                      </label>
+                      <input
+                        type="text"
+                        disabled={readOnly}
+                        placeholder="Ex: BRM56"
+                        value={activePosition.model || ''}
+                        onChange={(e) => handleUpdateRowPositions(activePosition.code, { model: e.target.value })}
+                        className="w-full px-2 py-1 text-xs rounded bg-slate-950 border border-slate-700 text-slate-200 focus:border-amber-500 focus:outline-none disabled:opacity-65"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-semibold text-slate-300 mb-0.5">
+                        Fornecedor
+                      </label>
+                      <input
+                        type="text"
+                        disabled={readOnly}
+                        placeholder="Ex: Brastemp"
+                        value={activePosition.supplier || ''}
+                        onChange={(e) => handleUpdateRowPositions(activePosition.code, { supplier: e.target.value })}
+                        className="w-full px-2 py-1 text-xs rounded bg-slate-950 border border-slate-700 text-slate-200 focus:border-amber-500 focus:outline-none disabled:opacity-65"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-semibold text-slate-300 mb-0.5">
+                        Vol./Item
+                      </label>
+                      <input
+                        type="number"
+                        min="0"
+                        disabled={readOnly}
+                        placeholder="1"
+                        value={activePosition.volumesPerItem ?? ''}
+                        onChange={(e) => {
+                          const raw = e.target.value.trim();
+                          handleUpdateRowPositions(activePosition.code, {
+                            volumesPerItem: raw === '' ? undefined : Math.max(0, parseInt(raw, 10) || 0),
+                          });
+                        }}
+                        className="w-full px-2 py-1 text-xs font-mono font-bold rounded bg-slate-950 border border-slate-700 text-slate-200 focus:border-amber-500 focus:outline-none disabled:opacity-65"
+                      />
+                    </div>
+                  </div>
+
                   <div>
                     <label className="block text-[10px] font-semibold text-slate-300 mb-1">
                       Status de Toda a Fileira
@@ -1153,6 +1206,55 @@ export function ZoneInternalPositionsManager({
                     onChange={(e) => handleUpdatePosition(activePosition.id, { description: e.target.value })}
                     className="w-full px-2 py-1 text-xs rounded bg-slate-950 border border-slate-700 text-slate-200 placeholder-slate-600 focus:border-red-500 focus:outline-none disabled:opacity-65"
                   />
+                </div>
+
+                {/* Modelo, Fornecedor e Volumes por Item */}
+                <div className="grid grid-cols-3 gap-2">
+                  <div>
+                    <label className="block text-[10px] font-semibold text-slate-400 mb-0.5">
+                      Modelo
+                    </label>
+                    <input
+                      type="text"
+                      disabled={readOnly}
+                      placeholder="Ex: BRM56"
+                      value={activePosition.model || ''}
+                      onChange={(e) => handleUpdatePosition(activePosition.id, { model: e.target.value })}
+                      className="w-full px-2 py-1 text-xs rounded bg-slate-950 border border-slate-700 text-slate-200 placeholder-slate-600 focus:border-red-500 focus:outline-none disabled:opacity-65"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-semibold text-slate-400 mb-0.5">
+                      Fornecedor
+                    </label>
+                    <input
+                      type="text"
+                      disabled={readOnly}
+                      placeholder="Ex: Brastemp"
+                      value={activePosition.supplier || ''}
+                      onChange={(e) => handleUpdatePosition(activePosition.id, { supplier: e.target.value })}
+                      className="w-full px-2 py-1 text-xs rounded bg-slate-950 border border-slate-700 text-slate-200 placeholder-slate-600 focus:border-red-500 focus:outline-none disabled:opacity-65"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-semibold text-slate-400 mb-0.5">
+                      Vol./Item
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      disabled={readOnly}
+                      placeholder="1"
+                      value={activePosition.volumesPerItem ?? ''}
+                      onChange={(e) => {
+                        const raw = e.target.value.trim();
+                        handleUpdatePosition(activePosition.id, {
+                          volumesPerItem: raw === '' ? undefined : Math.max(0, parseInt(raw, 10) || 0),
+                        });
+                      }}
+                      className="w-full px-2 py-1 text-xs font-mono font-bold rounded bg-slate-950 border border-slate-700 text-slate-200 placeholder-slate-600 focus:border-red-500 focus:outline-none disabled:opacity-65"
+                    />
+                  </div>
                 </div>
 
                 {/* Ações Rápidas da Célula (apenas Admin) */}
