@@ -54,9 +54,20 @@ type SpotlightPaletteProps = {
   areas: FloorArea[];
   activeAreaId: string;
   isDark: boolean;
+  isAdmin?: boolean;
   onNavigateToPosition: (areaId: string, elementId: string, x: number, y: number, name: string, code?: string) => void;
   onExecuteAction: (action: SpotlightCommandAction) => void;
 };
+
+const ADMIN_ONLY_ACTIONS = new Set<SpotlightCommandAction>([
+  'new_warehouse',
+  'resize_warehouse',
+  'import_backup',
+  'open_calibration',
+  'mode_move',
+  'mode_zone',
+  'mode_corridor',
+]);
 
 const SYSTEM_ACTIONS: Array<{
   actionId: SpotlightCommandAction;
@@ -164,6 +175,7 @@ export function SpotlightPalette({
   areas,
   activeAreaId,
   isDark,
+  isAdmin = false,
   onNavigateToPosition,
   onExecuteAction,
 }: SpotlightPaletteProps) {
@@ -274,6 +286,9 @@ export function SpotlightPalette({
 
     // 3. Ações do Sistema
     for (const act of SYSTEM_ACTIONS) {
+      if (!isAdmin && ADMIN_ONLY_ACTIONS.has(act.actionId)) {
+        continue;
+      }
       list.push({
         id: `act-${act.actionId}`,
         kind: 'action',
@@ -286,7 +301,7 @@ export function SpotlightPalette({
     }
 
     return list;
-  }, [areas]);
+  }, [areas, isAdmin]);
 
   // Filtragem fuzzy
   const filteredItems = useMemo(() => {

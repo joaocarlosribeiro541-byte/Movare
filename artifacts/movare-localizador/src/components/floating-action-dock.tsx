@@ -22,6 +22,7 @@ type FloatingActionDockProps = {
   onRedo: () => void;
   isDark: boolean;
   onOpenSpotlight: () => void;
+  isAdmin?: boolean;
 };
 
 export function FloatingActionDock({
@@ -38,7 +39,7 @@ export function FloatingActionDock({
   canRedo,
   onRedo,
   isDark,
-  onOpenSpotlight,
+  isAdmin = false,
 }: FloatingActionDockProps) {
   const [isMinimized, setIsMinimized] = useState(false);
 
@@ -68,7 +69,7 @@ export function FloatingActionDock({
               : 'bg-white/90 border-slate-200/90 text-slate-800 shadow-slate-500/20'
           }`}
         >
-          {/* CLUSTER 1: FERRAMENTAS BÁSICAS (SELECIONAR, MOVER, PAN) */}
+          {/* CLUSTER 1: FERRAMENTAS BÁSICAS */}
           <div className="flex items-center gap-0.5 sm:gap-1">
             <button
               type="button"
@@ -80,29 +81,31 @@ export function FloatingActionDock({
                   ? 'text-slate-400 hover:text-white hover:bg-slate-800/60'
                   : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
               }`}
-              title="Modo Seleção (V) — Clique para inspecionar e editar"
+              title="Modo Seleção (V) — Clique para consultar"
             >
               <MousePointer2 className="w-4 h-4 shrink-0" />
               <span className="hidden md:inline">Selecionar</span>
               <kbd className="hidden lg:inline text-[9px] opacity-60 font-mono">V</kbd>
             </button>
 
-            <button
-              type="button"
-              onClick={() => onSelectTool('move')}
-              className={`flex items-center gap-1 px-2.5 py-1.5 rounded-xl text-xs font-semibold transition-all shrink-0 ${
-                tool === 'move'
-                  ? 'bg-orange-500 text-white shadow-md shadow-orange-500/30'
-                  : isDark
-                  ? 'text-slate-400 hover:text-white hover:bg-slate-800/60'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-              }`}
-              title="Modo Mover (M) — Arraste elementos sem abrir inspetor"
-            >
-              <Move className="w-4 h-4 shrink-0" />
-              <span className="hidden md:inline">Mover</span>
-              <kbd className="hidden lg:inline text-[9px] opacity-60 font-mono">M</kbd>
-            </button>
+            {isAdmin && (
+              <button
+                type="button"
+                onClick={() => onSelectTool('move')}
+                className={`flex items-center gap-1 px-2.5 py-1.5 rounded-xl text-xs font-semibold transition-all shrink-0 ${
+                  tool === 'move'
+                    ? 'bg-orange-500 text-white shadow-md shadow-orange-500/30'
+                    : isDark
+                    ? 'text-slate-400 hover:text-white hover:bg-slate-800/60'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                }`}
+                title="Modo Mover (M) — Arraste elementos"
+              >
+                <Move className="w-4 h-4 shrink-0" />
+                <span className="hidden md:inline">Mover</span>
+                <kbd className="hidden lg:inline text-[9px] opacity-60 font-mono">M</kbd>
+              </button>
+            )}
 
             <button
               type="button"
@@ -122,44 +125,47 @@ export function FloatingActionDock({
             </button>
           </div>
 
-          {/* DIVISOR SUTIL */}
           <div className={`w-px h-6 mx-0.5 shrink-0 ${isDark ? 'bg-slate-800' : 'bg-slate-200'}`} />
 
-          {/* CLUSTER 2: DESENHO E CRIAÇÃO CAD (ZONA, CORREDOR, MEDIÇÃO) */}
+          {/* CLUSTER 2: DESENHO (ADMIN) E MEDIÇÃO (TODOS) */}
           <div className="flex items-center gap-0.5 sm:gap-1">
-            <button
-              type="button"
-              onClick={() => onSelectTool('rectangle')}
-              className={`flex items-center gap-1 px-2.5 py-1.5 rounded-xl text-xs font-semibold transition-all shrink-0 ${
-                tool === 'rectangle'
-                  ? 'bg-orange-500 text-white shadow-md shadow-orange-500/30'
-                  : isDark
-                  ? 'text-slate-400 hover:text-white hover:bg-slate-800/60'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-              }`}
-              title="Desenhar Nova Zona (R) — Arraste no mapa para criar bloco"
-            >
-              <RectangleHorizontal className="w-4 h-4 shrink-0" />
-              <span className="hidden sm:inline">Nova Zona</span>
-              <kbd className="hidden lg:inline text-[9px] opacity-60 font-mono">R</kbd>
-            </button>
+            {isAdmin && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => onSelectTool('rectangle')}
+                  className={`flex items-center gap-1 px-2.5 py-1.5 rounded-xl text-xs font-semibold transition-all shrink-0 ${
+                    tool === 'rectangle'
+                      ? 'bg-orange-500 text-white shadow-md shadow-orange-500/30'
+                      : isDark
+                      ? 'text-slate-400 hover:text-white hover:bg-slate-800/60'
+                      : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                  }`}
+                  title="Desenhar Nova Zona (R)"
+                >
+                  <RectangleHorizontal className="w-4 h-4 shrink-0" />
+                  <span className="hidden sm:inline">Nova Zona</span>
+                  <kbd className="hidden lg:inline text-[9px] opacity-60 font-mono">R</kbd>
+                </button>
 
-            <button
-              type="button"
-              onClick={() => onSelectTool('corridor')}
-              className={`flex items-center gap-1 px-2.5 py-1.5 rounded-xl text-xs font-semibold transition-all shrink-0 ${
-                tool === 'corridor'
-                  ? 'bg-orange-500 text-white shadow-md shadow-orange-500/30'
-                  : isDark
-                  ? 'text-slate-400 hover:text-white hover:bg-slate-800/60'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-              }`}
-              title="Identificador de Corredor (C) — Inserir rua logística"
-            >
-              <Tag className="w-4 h-4 shrink-0" />
-              <span className="hidden sm:inline">Corredor</span>
-              <kbd className="hidden lg:inline text-[9px] opacity-60 font-mono">C</kbd>
-            </button>
+                <button
+                  type="button"
+                  onClick={() => onSelectTool('corridor')}
+                  className={`flex items-center gap-1 px-2.5 py-1.5 rounded-xl text-xs font-semibold transition-all shrink-0 ${
+                    tool === 'corridor'
+                      ? 'bg-orange-500 text-white shadow-md shadow-orange-500/30'
+                      : isDark
+                      ? 'text-slate-400 hover:text-white hover:bg-slate-800/60'
+                      : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                  }`}
+                  title="Identificador de Corredor (C)"
+                >
+                  <Tag className="w-4 h-4 shrink-0" />
+                  <span className="hidden sm:inline">Corredor</span>
+                  <kbd className="hidden lg:inline text-[9px] opacity-60 font-mono">C</kbd>
+                </button>
+              </>
+            )}
 
             <button
               type="button"
@@ -179,85 +185,88 @@ export function FloatingActionDock({
             </button>
           </div>
 
-          {/* DIVISOR SUTIL */}
-          <div className={`w-px h-6 mx-0.5 shrink-0 ${isDark ? 'bg-slate-800' : 'bg-slate-200'}`} />
+          {isAdmin && (
+            <>
+              <div className={`w-px h-6 mx-0.5 shrink-0 ${isDark ? 'bg-slate-800' : 'bg-slate-200'}`} />
 
-          {/* CLUSTER 3: ASSISTENTES CAD (MAGNETISMO, FÍSICA, SELEÇÃO MÚLTIPLA) */}
-          <div className="flex items-center gap-0.5 sm:gap-1">
-            <button
-              type="button"
-              onClick={onToggleSnap}
-              className={`p-1.5 sm:px-2 rounded-xl text-xs font-medium transition-all shrink-0 flex items-center gap-1 ${
-                snapEnabled
-                  ? isDark ? 'bg-orange-500/20 text-orange-400 border border-orange-500/40' : 'bg-orange-100 text-orange-700 border border-orange-300'
-                  : isDark ? 'text-slate-500 hover:bg-slate-800/60' : 'text-slate-400 hover:bg-slate-100'
-              }`}
-              title={snapEnabled ? 'Magnetismo / Snap Ativado' : 'Magnetismo / Snap Desativado'}
-            >
-              <Magnet className="w-4 h-4 shrink-0" />
-              <span className="hidden xl:inline text-[11px]">Snap</span>
-            </button>
+              {/* CLUSTER 3: ASSISTENTES CAD */}
+              <div className="flex items-center gap-0.5 sm:gap-1">
+                <button
+                  type="button"
+                  onClick={onToggleSnap}
+                  className={`p-1.5 sm:px-2 rounded-xl text-xs font-medium transition-all shrink-0 flex items-center gap-1 ${
+                    snapEnabled
+                      ? isDark ? 'bg-orange-500/20 text-orange-400 border border-orange-500/40' : 'bg-orange-100 text-orange-700 border border-orange-300'
+                      : isDark ? 'text-slate-500 hover:bg-slate-800/60' : 'text-slate-400 hover:bg-slate-100'
+                  }`}
+                  title={snapEnabled ? 'Magnetismo / Snap Ativado' : 'Magnetismo / Snap Desativado'}
+                >
+                  <Magnet className="w-4 h-4 shrink-0" />
+                  <span className="hidden xl:inline text-[11px]">Snap</span>
+                </button>
 
-            <button
-              type="button"
-              onClick={onTogglePhysics}
-              className={`p-1.5 sm:px-2 rounded-xl text-xs font-medium transition-all shrink-0 flex items-center gap-1 ${
-                physicsEnabled
-                  ? isDark ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40' : 'bg-emerald-100 text-emerald-700 border border-emerald-300'
-                  : isDark ? 'text-slate-500 hover:bg-slate-800/60' : 'text-slate-400 hover:bg-slate-100'
-              }`}
-              title={physicsEnabled ? 'Física Anti-Sobreposição Ativada' : 'Física Desativada'}
-            >
-              <ShieldCheck className="w-4 h-4 shrink-0" />
-              <span className="hidden xl:inline text-[11px]">Física</span>
-            </button>
+                <button
+                  type="button"
+                  onClick={onTogglePhysics}
+                  className={`p-1.5 sm:px-2 rounded-xl text-xs font-medium transition-all shrink-0 flex items-center gap-1 ${
+                    physicsEnabled
+                      ? isDark ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40' : 'bg-emerald-100 text-emerald-700 border border-emerald-300'
+                      : isDark ? 'text-slate-500 hover:bg-slate-800/60' : 'text-slate-400 hover:bg-slate-100'
+                  }`}
+                  title={physicsEnabled ? 'Física Anti-Sobreposição Ativada' : 'Física Desativada'}
+                >
+                  <ShieldCheck className="w-4 h-4 shrink-0" />
+                  <span className="hidden xl:inline text-[11px]">Física</span>
+                </button>
 
-            <button
-              type="button"
-              onClick={onToggleMultiSelect}
-              className={`p-1.5 sm:px-2 rounded-xl text-xs font-medium transition-all shrink-0 flex items-center gap-1 ${
-                multiSelectMode
-                  ? isDark ? 'bg-sky-500/20 text-sky-400 border border-sky-500/40' : 'bg-sky-100 text-sky-700 border border-sky-300'
-                  : isDark ? 'text-slate-500 hover:bg-slate-800/60' : 'text-slate-400 hover:bg-slate-100'
-              }`}
-              title={multiSelectMode ? 'Seleção Múltipla Ativa' : 'Ativar Seleção Múltipla'}
-            >
-              <CheckSquare className="w-4 h-4 shrink-0" />
-              <span className="hidden xl:inline text-[11px]">Multi</span>
-            </button>
-          </div>
+                <button
+                  type="button"
+                  onClick={onToggleMultiSelect}
+                  className={`p-1.5 sm:px-2 rounded-xl text-xs font-medium transition-all shrink-0 flex items-center gap-1 ${
+                    multiSelectMode
+                      ? isDark ? 'bg-sky-500/20 text-sky-400 border border-sky-500/40' : 'bg-sky-100 text-sky-700 border border-sky-300'
+                      : isDark ? 'text-slate-500 hover:bg-slate-800/60' : 'text-slate-400 hover:bg-slate-100'
+                  }`}
+                  title={multiSelectMode ? 'Seleção Múltipla Ativa' : 'Ativar Seleção Múltipla'}
+                >
+                  <CheckSquare className="w-4 h-4 shrink-0" />
+                  <span className="hidden xl:inline text-[11px]">Multi</span>
+                </button>
+              </div>
 
-          {/* DIVISOR SUTIL */}
-          <div className={`w-px h-6 mx-0.5 shrink-0 ${isDark ? 'bg-slate-800' : 'bg-slate-200'}`} />
+              <div className={`w-px h-6 mx-0.5 shrink-0 ${isDark ? 'bg-slate-800' : 'bg-slate-200'}`} />
 
-          {/* CLUSTER 4: HISTÓRICO UNDO / REDO */}
-          <div className="flex items-center gap-0.5 sm:gap-1">
-            <button
-              type="button"
-              onClick={onUndo}
-              disabled={!canUndo}
-              className={`p-1.5 rounded-xl transition-all shrink-0 disabled:opacity-25 ${
-                isDark ? 'text-slate-400 hover:text-white hover:bg-slate-800/60' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-              }`}
-              title="Desfazer (Ctrl+Z)"
-            >
-              <RotateCcw className="w-3.5 h-3.5" />
-            </button>
+              {/* CLUSTER 4: HISTÓRICO UNDO / REDO */}
+              <div className="flex items-center gap-0.5 sm:gap-1">
+                <button
+                  type="button"
+                  onClick={onUndo}
+                  disabled={!canUndo}
+                  className={`p-1.5 rounded-xl transition-all shrink-0 disabled:opacity-25 ${
+                    isDark ? 'text-slate-400 hover:text-white hover:bg-slate-800/60' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                  }`}
+                  title="Desfazer (Ctrl+Z)"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                </button>
 
-            <button
-              type="button"
-              onClick={onRedo}
-              disabled={!canRedo}
-              className={`p-1.5 rounded-xl transition-all shrink-0 disabled:opacity-25 ${
-                isDark ? 'text-slate-400 hover:text-white hover:bg-slate-800/60' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-              }`}
-              title="Refazer (Ctrl+Y)"
-            >
-              <Redo2 className="w-3.5 h-3.5" />
-            </button>
-          </div>
+                <button
+                  type="button"
+                  onClick={onRedo}
+                  disabled={!canRedo}
+                  className={`p-1.5 rounded-xl transition-all shrink-0 disabled:opacity-25 ${
+                    isDark ? 'text-slate-400 hover:text-white hover:bg-slate-800/60' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                  }`}
+                  title="Refazer (Ctrl+Y)"
+                >
+                  <Redo2 className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </>
+          )}
         </div>
       )}
     </div>
   );
 }
+

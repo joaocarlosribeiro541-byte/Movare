@@ -14,6 +14,7 @@ type LayersManagerDialogProps = {
   onSetFocusedGroupId: (groupId: string | null) => void;
   onUpdateElements: (updated: DrawingElement[]) => void;
   isDark?: boolean;
+  readOnly?: boolean;
 };
 
 export function LayersManagerDialog({
@@ -24,6 +25,7 @@ export function LayersManagerDialog({
   onSetFocusedGroupId,
   onUpdateElements,
   isDark = true,
+  readOnly = false,
 }: LayersManagerDialogProps) {
   const [newLayerName, setNewLayerName] = useState('');
   const [newLayerColor, setNewLayerColor] = useState('#f97316');
@@ -32,15 +34,12 @@ export function LayersManagerDialog({
   if (!isOpen) return null;
 
   // Agrupamento de elementos por Espaço / Grupo
-  // As zonas (type === 'rectangle' com nome) ou grupos explícitos definem os espaços
   const zoneGroups = elements.filter((el) => el.type === 'rectangle');
 
-  // Contagem de elementos filhos associados
   const getGroupStats = (zoneId: string, zone: DrawingElement) => {
     const insideItems = elements.filter((el) => {
       if (el.id === zoneId) return false;
       if (el.groupId === zoneId) return true;
-      // Detecção geométrica se está dentro do espaço
       const isInside =
         el.x >= zone.x - 5 &&
         el.y >= zone.y - 5 &&
@@ -60,8 +59,9 @@ export function LayersManagerDialog({
     };
   };
 
-  // Alternar visibilidade de todo o espaço
+  // Alternar visibilidade de todo o espaço (Admin apenas)
   const toggleSpaceVisibility = (zone: DrawingElement) => {
+    if (readOnly) return;
     const { insideItems, isAllHidden } = getGroupStats(zone.id, zone);
     const newHidden = !isAllHidden;
     const targetIds = new Set([zone.id, ...insideItems.map((i) => i.id)]);
@@ -72,8 +72,9 @@ export function LayersManagerDialog({
     onUpdateElements(updated);
   };
 
-  // Alternar trava de todo o espaço
+  // Alternar trava de todo o espaço (Admin apenas)
   const toggleSpaceLock = (zone: DrawingElement) => {
+    if (readOnly) return;
     const { insideItems, isAllLocked } = getGroupStats(zone.id, zone);
     const newLocked = !isAllLocked;
     const targetIds = new Set([zone.id, ...insideItems.map((i) => i.id)]);
@@ -84,7 +85,7 @@ export function LayersManagerDialog({
     onUpdateElements(updated);
   };
 
-  // Entrar ou sair do modo de foco individual do espaço
+  // Entrar ou sair do modo de foco individual (visualização permitida para todos)
   const handleToggleFocus = (zoneId: string) => {
     if (focusedGroupId === zoneId) {
       onSetFocusedGroupId(null);
@@ -95,7 +96,7 @@ export function LayersManagerDialog({
   };
 
   const handleCreateNewSpace = () => {
-    if (!newLayerName.trim()) return;
+    if (readOnly || !newLayerName.trim()) return;
     const newSpace: DrawingElement = {
       id: createId('space'),
       type: 'rectangle',
@@ -114,7 +115,6 @@ export function LayersManagerDialog({
     onClose();
   };
 
-  // Itens soltos (sem zona pai)
   const unassignedElements = elements.filter(
     (el) => el.type !== 'rectangle' && !el.groupId && !zoneGroups.some((z) =>
       el.x >= z.x - 5 && el.y >= z.y - 5 && el.x + el.width <= z.x + z.width + 5 && el.y + el.height <= z.y + z.height + 5
@@ -180,17 +180,19 @@ export function LayersManagerDialog({
             <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider font-mono">
               Espaços Dedicados ({zoneGroups.length})
             </span>
-            <button
-              type="button"
-              onClick={() => setShowCreateForm(!showCreateForm)}
-              className="text-xs font-semibold text-orange-400 hover:text-orange-300 flex items-center gap-1"
-            >
-              <Plus className="w-3.5 h-3.5" />
-              <span>Novo Espaço</span>
-            </button>
+            {!readOnly && (
+              <button
+                type="button"
+                onClick={() => setShowCreateForm(!showCreateForm)}
+                className="text-xs font-semibold text-orange-400 hover:text-orange-300 flex items-center gap-1"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Novo Espaço</span>
+              </button>
+            )}
           </div>
 
-          {showCreateForm && (
+          {!readOnly && showCreateForm && (
             <div className="p-3.5 rounded-xl border border-orange-500/40 bg-orange-500/5 space-y-3">
               <div className="text-xs font-bold text-slate-200">Criar Novo Espaço / Camada de Armazenagem:</div>
               <div className="flex gap-2">
@@ -272,35 +274,39 @@ export function LayersManagerDialog({
                   </div>
 
                   <div className="flex items-center gap-1.5 shrink-0">
-                    {/* Botão Visibilidade */}
-                    <button
-                      type="button"
-                      onClick={() => toggleSpaceVisibility(zone)}
-                      className={`p-2 rounded-lg text-xs transition-colors ${
-                        isAllHidden
-                          ? 'bg-rose-500/20 text-rose-400'
-                          : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
-                      }`}
-                      title={isAllHidden ? 'Exibir espaço e itens' : 'Ocultar espaço'}
-                    >
-                      {isAllHidden ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                    </button>
+                    {!readOnly && (
+                      <>
+                        {/* Botão Visibilidade */}
+                        <button
+                          type="button"
+                          onClick={() => toggleSpaceVisibility(zone)}
+                          className={`p-2 rounded-lg text-xs transition-colors ${
+                            isAllHidden
+                              ? 'bg-rose-500/20 text-rose-400'
+                              : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+                          }`}
+                          title={isAllHidden ? 'Exibir espaço e itens' : 'Ocultar espaço'}
+                        >
+                          {isAllHidden ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                        </button>
 
-                    {/* Botão Trava */}
-                    <button
-                      type="button"
-                      onClick={() => toggleSpaceLock(zone)}
-                      className={`p-2 rounded-lg text-xs transition-colors ${
-                        isAllLocked
-                          ? 'bg-amber-500/20 text-amber-400'
-                          : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
-                      }`}
-                      title={isAllLocked ? 'Desbloquear espaço' : 'Travar espaço'}
-                    >
-                      {isAllLocked ? <Lock className="w-4 h-4" /> : <Unlock className="w-4 h-4" />}
-                    </button>
+                        {/* Botão Trava */}
+                        <button
+                          type="button"
+                          onClick={() => toggleSpaceLock(zone)}
+                          className={`p-2 rounded-lg text-xs transition-colors ${
+                            isAllLocked
+                              ? 'bg-amber-500/20 text-amber-400'
+                              : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+                          }`}
+                          title={isAllLocked ? 'Desbloquear espaço' : 'Travar espaço'}
+                        >
+                          {isAllLocked ? <Lock className="w-4 h-4" /> : <Unlock className="w-4 h-4" />}
+                        </button>
+                      </>
+                    )}
 
-                    {/* Botão Isolar / Modo Foco */}
+                    {/* Botão Isolar / Modo Foco (visualização permitida a todos) */}
                     <button
                       type="button"
                       onClick={() => handleToggleFocus(zone.id)}
@@ -309,10 +315,22 @@ export function LayersManagerDialog({
                           ? 'bg-orange-600 text-white'
                           : 'bg-slate-800 hover:bg-slate-700 text-orange-400 border border-orange-500/30'
                       }`}
-                      title="Isolar este espaço para adicionar divisórias e produtos individualmente"
+                      title={
+                        readOnly
+                          ? 'Isolar este espaço para visualização detalhada'
+                          : 'Isolar este espaço para adicionar divisórias e produtos individualmente'
+                      }
                     >
                       <Target className="w-3.5 h-3.5" />
-                      <span>{isFocused ? 'Em Edição' : 'Editar Espaço'}</span>
+                      <span>
+                        {readOnly
+                          ? isFocused
+                            ? 'Em Visualização'
+                            : 'Visualizar Espaço'
+                          : isFocused
+                          ? 'Em Edição'
+                          : 'Editar Espaço'}
+                      </span>
                     </button>
                   </div>
                 </div>

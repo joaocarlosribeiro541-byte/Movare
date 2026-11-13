@@ -1,13 +1,15 @@
-import { useState, useRef } from 'react';
 import {
   MousePointer2, Move, RectangleHorizontal, Tag, Ruler,
   Magnet, ShieldCheck, CheckSquare, Search, Layers,
   ArrowDownToLine, ArrowUpFromLine, CircleHelp, Sun, Moon,
   Plus, ChevronDown, Maximize2, RotateCcw, Redo2,
-  SlidersHorizontal, PanelRightOpen, PanelRightClose, Camera, Crosshair
+  SlidersHorizontal, PanelRightOpen, PanelRightClose, Camera, Crosshair,
+  Eye, LogIn, Cloud, CloudOff, AlertTriangle
 } from 'lucide-react';
 import type { FloorArea } from '../editor-model';
 import type { EditorTool } from './floating-action-dock';
+import type { RealtimeConnectionStatus } from '../lib/map-service';
+import type { CloudSyncStatus } from '../hooks/use-shared-map';
 
 type TopCommandBarProps = {
   areas: FloorArea[];
@@ -42,6 +44,13 @@ type TopCommandBarProps = {
   sidebarOpen: boolean;
   onToggleSidebar: () => void;
   onOpenMobileMenu: () => void;
+  isAdmin?: boolean;
+  userEmail?: string | null;
+  connectionStatus?: RealtimeConnectionStatus;
+  syncStatus?: CloudSyncStatus;
+  mapVersion?: number | null;
+  onOpenAccessPanel?: () => void;
+  onOpenLogin?: () => void;
 };
 
 export function TopCommandBar({
@@ -77,11 +86,14 @@ export function TopCommandBar({
   sidebarOpen,
   onToggleSidebar,
   onOpenMobileMenu,
+  isAdmin = false,
+  userEmail = null,
+  connectionStatus = 'unconfigured',
+  syncStatus = 'idle',
+  mapVersion = null,
+  onOpenAccessPanel,
+  onOpenLogin,
 }: TopCommandBarProps) {
-  const [toolsDropdownOpen, setToolsDropdownOpen] = useState(false);
-
-  const activeArea = areas.find((a) => a.id === activeAreaId) || areas[0];
-
   return (
     <header
       className={`h-12 shrink-0 flex items-center justify-between gap-2 px-3 sm:px-4 border-b z-30 select-none backdrop-blur-2xl transition-colors duration-200 ${
@@ -122,26 +134,31 @@ export function TopCommandBar({
           </select>
           <ChevronDown className="w-3.5 h-3.5 text-slate-400 -ml-3.5 pointer-events-none shrink-0" />
 
-          <button
-            type="button"
-            onClick={onCreateNewArea}
-            title="Novo Galpão"
-            className="p-0.5 ml-1 text-slate-400 hover:text-orange-500 transition-colors shrink-0"
-          >
-            <Plus className="w-3.5 h-3.5" />
-          </button>
+          {isAdmin && (
+            <button
+              type="button"
+              onClick={onCreateNewArea}
+              title="Novo Galpão"
+              className="p-0.5 ml-1 text-slate-400 hover:text-orange-500 transition-colors shrink-0 cursor-pointer"
+            >
+              <Plus className="w-3.5 h-3.5" />
+            </button>
+          )}
         </div>
 
-        {/* Dimensões em Metros (Acesso rápido ao diálogo de redimensionamento) */}
+        {/* Dimensões em Metros */}
         <button
           type="button"
-          onClick={onOpenResizeDialog}
-          className={`hidden lg:flex items-center gap-1.5 px-2 py-1 rounded-xl border text-[11px] font-mono transition-colors cursor-pointer ${
+          onClick={isAdmin ? onOpenResizeDialog : undefined}
+          disabled={!isAdmin}
+          className={`hidden lg:flex items-center gap-1.5 px-2 py-1 rounded-xl border text-[11px] font-mono transition-colors ${
+            isAdmin ? 'cursor-pointer' : 'cursor-default opacity-80'
+          } ${
             isDark
               ? 'bg-slate-900/50 border-slate-800 text-slate-300 hover:border-orange-500/50 hover:text-orange-400'
               : 'bg-slate-100/80 border-slate-200 text-slate-700 hover:border-orange-500 hover:text-orange-600'
           }`}
-          title="Dimensões do Galpão (Clique para redimensionar)"
+          title={isAdmin ? 'Dimensões do Galpão (Clique para redimensionar)' : 'Dimensões atuais do galpão'}
         >
           <Maximize2 className="w-3 h-3 text-orange-500 shrink-0" />
           <span className="tabular-nums font-semibold">{bounds.widthMeters}×{bounds.heightMeters}m</span>
@@ -172,53 +189,75 @@ export function TopCommandBar({
             <span>Selecionar</span>
           </button>
 
-          <button
-            type="button"
-            onClick={() => onSelectTool('move')}
-            className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
-              tool === 'move'
-                ? 'bg-orange-500 text-white shadow-xs'
-                : isDark
-                ? 'text-slate-400 hover:text-white hover:bg-slate-800/60'
-                : 'text-slate-600 hover:text-slate-900 hover:bg-white'
-            }`}
-            title="Mover (M)"
-          >
-            <Move className="w-3.5 h-3.5" />
-            <span>Mover</span>
-          </button>
+          {!isAdmin && (
+            <button
+              type="button"
+              onClick={() => onSelectTool('pan')}
+              className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                tool === 'pan'
+                  ? 'bg-orange-500 text-white shadow-xs'
+                  : isDark
+                  ? 'text-slate-400 hover:text-white hover:bg-slate-800/60'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-white'
+              }`}
+              title="Navegar no Mapa (H)"
+            >
+              <Eye className="w-3.5 h-3.5" />
+              <span>Navegar</span>
+            </button>
+          )}
 
-          <button
-            type="button"
-            onClick={() => onSelectTool('rectangle')}
-            className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
-              tool === 'rectangle'
-                ? 'bg-orange-500 text-white shadow-xs'
-                : isDark
-                ? 'text-slate-400 hover:text-white hover:bg-slate-800/60'
-                : 'text-slate-600 hover:text-slate-900 hover:bg-white'
-            }`}
-            title="Nova Zona (R)"
-          >
-            <RectangleHorizontal className="w-3.5 h-3.5 text-orange-400" />
-            <span className="hidden xl:inline">Zona</span>
-          </button>
+          {isAdmin && (
+            <>
+              <button
+                type="button"
+                onClick={() => onSelectTool('move')}
+                className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                  tool === 'move'
+                    ? 'bg-orange-500 text-white shadow-xs'
+                    : isDark
+                    ? 'text-slate-400 hover:text-white hover:bg-slate-800/60'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-white'
+                }`}
+                title="Mover (M)"
+              >
+                <Move className="w-3.5 h-3.5" />
+                <span>Mover</span>
+              </button>
 
-          <button
-            type="button"
-            onClick={() => onSelectTool('corridor')}
-            className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
-              tool === 'corridor'
-                ? 'bg-orange-500 text-white shadow-xs'
-                : isDark
-                ? 'text-slate-400 hover:text-white hover:bg-slate-800/60'
-                : 'text-slate-600 hover:text-slate-900 hover:bg-white'
-            }`}
-            title="Corredor / Rua (C)"
-          >
-            <Tag className="w-3.5 h-3.5 text-emerald-400" />
-            <span className="hidden xl:inline">Rua</span>
-          </button>
+              <button
+                type="button"
+                onClick={() => onSelectTool('rectangle')}
+                className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                  tool === 'rectangle'
+                    ? 'bg-orange-500 text-white shadow-xs'
+                    : isDark
+                    ? 'text-slate-400 hover:text-white hover:bg-slate-800/60'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-white'
+                }`}
+                title="Nova Zona (R)"
+              >
+                <RectangleHorizontal className="w-3.5 h-3.5 text-orange-400" />
+                <span className="hidden xl:inline">Zona</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => onSelectTool('corridor')}
+                className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                  tool === 'corridor'
+                    ? 'bg-orange-500 text-white shadow-xs'
+                    : isDark
+                    ? 'text-slate-400 hover:text-white hover:bg-slate-800/60'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-white'
+                }`}
+                title="Corredor / Rua (C)"
+              >
+                <Tag className="w-3.5 h-3.5 text-emerald-400" />
+                <span className="hidden xl:inline">Rua</span>
+              </button>
+            </>
+          )}
 
           <button
             type="button"
@@ -237,59 +276,63 @@ export function TopCommandBar({
           </button>
         </div>
 
-        {/* Toggles de Precisão: Magnetismo CAD & Física */}
+        {/* Toggles de Precisão: Magnetismo CAD & Física (edição apenas para Admin) */}
         <div
           className={`flex items-center p-0.5 rounded-xl border ${
             isDark ? 'bg-slate-900/80 border-slate-800' : 'bg-slate-100/80 border-slate-200'
           }`}
         >
-          <button
-            type="button"
-            onClick={onToggleSnap}
-            className={`p-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer flex items-center gap-1 ${
-              snapEnabled
-                ? isDark
-                  ? 'bg-orange-500/20 text-orange-400 border border-orange-500/40'
-                  : 'bg-orange-100 text-orange-700 border border-orange-300'
-                : 'text-slate-400 hover:text-slate-200'
-            }`}
-            title={snapEnabled ? 'Magnetismo Snap Ativo' : 'Movimento Livre'}
-          >
-            <Magnet className="w-3.5 h-3.5" />
-            <span className="hidden 2xl:inline text-[11px]">Snap</span>
-          </button>
+          {isAdmin && (
+            <>
+              <button
+                type="button"
+                onClick={onToggleSnap}
+                className={`p-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer flex items-center gap-1 ${
+                  snapEnabled
+                    ? isDark
+                      ? 'bg-orange-500/20 text-orange-400 border border-orange-500/40'
+                      : 'bg-orange-100 text-orange-700 border border-orange-300'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+                title={snapEnabled ? 'Magnetismo Snap Ativo' : 'Movimento Livre'}
+              >
+                <Magnet className="w-3.5 h-3.5" />
+                <span className="hidden 2xl:inline text-[11px]">Snap</span>
+              </button>
 
-          <button
-            type="button"
-            onClick={onTogglePhysics}
-            className={`p-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer flex items-center gap-1 ${
-              physicsEnabled
-                ? isDark
-                  ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'
-                  : 'bg-emerald-100 text-emerald-700 border border-emerald-300'
-                : 'text-slate-400 hover:text-slate-200'
-            }`}
-            title={physicsEnabled ? 'Física Anti-Sobreposição Ativa' : 'Física Desativada'}
-          >
-            <ShieldCheck className="w-3.5 h-3.5" />
-            <span className="hidden 2xl:inline text-[11px]">Física</span>
-          </button>
+              <button
+                type="button"
+                onClick={onTogglePhysics}
+                className={`p-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer flex items-center gap-1 ${
+                  physicsEnabled
+                    ? isDark
+                      ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'
+                      : 'bg-emerald-100 text-emerald-700 border border-emerald-300'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+                title={physicsEnabled ? 'Física Anti-Sobreposição Ativa' : 'Física Desativada'}
+              >
+                <ShieldCheck className="w-3.5 h-3.5" />
+                <span className="hidden 2xl:inline text-[11px]">Física</span>
+              </button>
 
-          <button
-            type="button"
-            onClick={onToggleMultiSelect}
-            className={`p-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer flex items-center gap-1 ${
-              multiSelectMode
-                ? isDark
-                  ? 'bg-sky-500/20 text-sky-400 border border-sky-500/40'
-                  : 'bg-sky-100 text-sky-700 border border-sky-300'
-                : 'text-slate-400 hover:text-slate-200'
-            }`}
-            title={multiSelectMode ? 'Seleção Múltipla Ativa' : 'Seleção Individual'}
-          >
-            <CheckSquare className="w-3.5 h-3.5" />
-            <span className="hidden 2xl:inline text-[11px]">Multi</span>
-          </button>
+              <button
+                type="button"
+                onClick={onToggleMultiSelect}
+                className={`p-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer flex items-center gap-1 ${
+                  multiSelectMode
+                    ? isDark
+                      ? 'bg-sky-500/20 text-sky-400 border border-sky-500/40'
+                      : 'bg-sky-100 text-sky-700 border border-sky-300'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+                title={multiSelectMode ? 'Seleção Múltipla Ativa' : 'Seleção Individual'}
+              >
+                <CheckSquare className="w-3.5 h-3.5" />
+                <span className="hidden 2xl:inline text-[11px]">Multi</span>
+              </button>
+            </>
+          )}
 
           {onTogglePrecisionNav && (
             <button
@@ -311,7 +354,7 @@ export function TopCommandBar({
         </div>
       </div>
 
-      {/* SEÇÃO 3: SPOTLIGHT, GAVETAS & AÇÕES DE SISTEMA */}
+      {/* SEÇÃO 3: SPOTLIGHT, GAVETAS, STATUS NUVEM & AÇÕES DE SISTEMA */}
       <div className="flex items-center gap-1.5 shrink-0">
         {/* Gatilho do Spotlight (Busca rápida Ctrl+K) */}
         <button
@@ -365,36 +408,38 @@ export function TopCommandBar({
           <span className="hidden sm:inline">Exportar PNG</span>
         </button>
 
-        {/* Histórico Desfazer / Refazer */}
-        <div
-          className={`hidden md:flex items-center rounded-xl border p-0.5 ${
-            isDark ? 'border-slate-800 bg-slate-900/60' : 'border-slate-200 bg-slate-100/80'
-          }`}
-        >
-          <button
-            type="button"
-            onClick={onUndo}
-            disabled={!canUndo}
-            title="Desfazer (Ctrl+Z)"
-            className={`p-1 rounded-lg transition-colors disabled:opacity-25 ${
-              isDark ? 'text-slate-400 hover:text-white hover:bg-slate-800' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200'
+        {/* Histórico Desfazer / Refazer (somente Admin) */}
+        {isAdmin && (
+          <div
+            className={`hidden md:flex items-center rounded-xl border p-0.5 ${
+              isDark ? 'border-slate-800 bg-slate-900/60' : 'border-slate-200 bg-slate-100/80'
             }`}
           >
-            <RotateCcw className="w-3.5 h-3.5" />
-          </button>
-          <div className={`w-px h-3.5 ${isDark ? 'bg-slate-800' : 'bg-slate-200'}`} />
-          <button
-            type="button"
-            onClick={onRedo}
-            disabled={!canRedo}
-            title="Refazer (Ctrl+Y)"
-            className={`p-1 rounded-lg transition-colors disabled:opacity-25 ${
-              isDark ? 'text-slate-400 hover:text-white hover:bg-slate-800' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200'
-            }`}
-          >
-            <Redo2 className="w-3.5 h-3.5" />
-          </button>
-        </div>
+            <button
+              type="button"
+              onClick={onUndo}
+              disabled={!canUndo}
+              title="Desfazer (Ctrl+Z)"
+              className={`p-1 rounded-lg transition-colors disabled:opacity-25 ${
+                isDark ? 'text-slate-400 hover:text-white hover:bg-slate-800' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200'
+              }`}
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+            </button>
+            <div className={`w-px h-3.5 ${isDark ? 'bg-slate-800' : 'bg-slate-200'}`} />
+            <button
+              type="button"
+              onClick={onRedo}
+              disabled={!canRedo}
+              title="Refazer (Ctrl+Y)"
+              className={`p-1 rounded-lg transition-colors disabled:opacity-25 ${
+                isDark ? 'text-slate-400 hover:text-white hover:bg-slate-800' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200'
+              }`}
+            >
+              <Redo2 className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
 
         {/* Backup JSON */}
         <div
@@ -406,24 +451,82 @@ export function TopCommandBar({
             type="button"
             onClick={onExportBackup}
             title="Exportar Backup JSON"
-            className={`p-1 rounded-lg transition-colors ${
+            className={`p-1 rounded-lg transition-colors cursor-pointer ${
               isDark ? 'text-slate-400 hover:text-white hover:bg-slate-800' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200'
             }`}
           >
             <ArrowDownToLine className="w-3.5 h-3.5" />
           </button>
-          <div className={`w-px h-3.5 ${isDark ? 'bg-slate-800' : 'bg-slate-200'}`} />
+          {isAdmin && (
+            <>
+              <div className={`w-px h-3.5 ${isDark ? 'bg-slate-800' : 'bg-slate-200'}`} />
+              <button
+                type="button"
+                onClick={onImportBackup}
+                title="Importar Backup JSON"
+                className={`p-1 rounded-lg transition-colors cursor-pointer ${
+                  isDark ? 'text-slate-400 hover:text-white hover:bg-slate-800' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200'
+                }`}
+              >
+                <ArrowUpFromLine className="w-3.5 h-3.5" />
+              </button>
+            </>
+          )}
+        </div>
+
+        {/* Status de Acesso & Sincronização Nuvem */}
+        {onOpenAccessPanel && (
           <button
             type="button"
-            onClick={onImportBackup}
-            title="Importar Backup JSON"
-            className={`p-1 rounded-lg transition-colors ${
-              isDark ? 'text-slate-400 hover:text-white hover:bg-slate-800' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200'
+            onClick={onOpenAccessPanel}
+            className={`flex items-center gap-1.5 px-2 py-1 rounded-xl border text-[11px] font-semibold transition-all cursor-pointer ${
+              syncStatus === 'conflict' || syncStatus === 'error'
+                ? 'bg-rose-500/15 border-rose-500/40 text-rose-300'
+                : isAdmin
+                ? isDark
+                  ? 'bg-emerald-500/15 border-emerald-500/35 text-emerald-300 hover:bg-emerald-500/25'
+                  : 'bg-emerald-50 border-emerald-300 text-emerald-700 hover:bg-emerald-100'
+                : isDark
+                ? 'bg-slate-900/80 border-slate-700/80 text-slate-300 hover:border-slate-500'
+                : 'bg-slate-100 border-slate-300 text-slate-700 hover:bg-slate-200'
             }`}
+            title={
+              isAdmin
+                ? `Administrador conectado (${userEmail || 'admin'}) · Versão v${mapVersion ?? 0}`
+                : 'Modo Visitante (somente leitura) · Clique para detalhes de sincronização ou login'
+            }
           >
-            <ArrowUpFromLine className="w-3.5 h-3.5" />
+            {syncStatus === 'conflict' || syncStatus === 'error' ? (
+              <AlertTriangle className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+            ) : connectionStatus === 'connected' ? (
+              <Cloud className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+            ) : (
+              <CloudOff className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+            )}
+            <span className="hidden sm:inline">
+              {isAdmin ? 'Admin' : 'Visitante'}
+            </span>
+            {syncStatus === 'syncing' && (
+              <span className="w-2 h-2 rounded-full bg-orange-400 animate-pulse shrink-0" />
+            )}
           </button>
-        </div>
+        )}
+
+        {!userEmail && onOpenLogin && (
+          <button
+            type="button"
+            onClick={onOpenLogin}
+            className={`hidden sm:flex items-center gap-1 px-2 py-1 rounded-xl border text-[11px] font-bold transition-colors cursor-pointer ${
+              isDark
+                ? 'bg-slate-900 border-slate-700 text-orange-400 hover:bg-orange-500/15 hover:border-orange-500/50'
+                : 'bg-white border-slate-300 text-orange-600 hover:bg-orange-50'
+            }`}
+            title="Entrar como Administrador"
+          >
+            <LogIn className="w-3.5 h-3.5" />
+            <span>Entrar</span>
+          </button>
+        )}
 
         {/* Atalhos (?) */}
         <button
@@ -483,3 +586,4 @@ export function TopCommandBar({
     </header>
   );
 }
+

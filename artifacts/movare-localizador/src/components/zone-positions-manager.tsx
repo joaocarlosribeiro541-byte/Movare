@@ -20,11 +20,13 @@ import {
   PackageX,
   X,
   Pencil,
+  Eye,
   Trash2,
   Copy,
   Info,
   Settings,
-  Grid
+  Grid,
+  Lock
 } from 'lucide-react';
 import { PRODUCT_SIZES, type DrawingElement, type ProductSize } from '../editor-model';
 import {
@@ -45,6 +47,7 @@ type ZoneInternalPositionsManagerProps = {
   selectedPositionId: string | null;
   onSelectPosition: (posId: string | null) => void;
   isDark?: boolean;
+  readOnly?: boolean;
 };
 
 export function getPositionDimensions(
@@ -87,6 +90,7 @@ export function ZoneInternalPositionsManager({
   selectedPositionId,
   onSelectPosition,
   isDark = true,
+  readOnly = false,
 }: ZoneInternalPositionsManagerProps) {
   const profile = getCategoryProfile(element.category);
   const safeScaleRatio = Number.isFinite(scaleRatio) && scaleRatio > 0 ? scaleRatio : 25;
@@ -153,6 +157,7 @@ export function ZoneInternalPositionsManager({
 
   // Atualiza todas as células da mesma fileira (códigos iguais) de uma só vez
   const handleUpdateRowPositions = (targetCode: string, patch: Partial<InternalPosition>) => {
+    if (readOnly) return;
     const updated = positions.map((p) => {
       if (p.code !== targetCode) return p;
       return {
@@ -197,6 +202,7 @@ export function ZoneInternalPositionsManager({
 
   // Aplicação instantânea de preset de porte com vínculo automático e preservação de estoque
   const handleApplyVolumePreset = (presetId: ProductSize) => {
+    if (readOnly) return;
     const { updatedElement, migrationReport } = migratePositionsOnPresetChange(element, presetId, safeScaleRatio);
     onUpdateElement(updatedElement);
     if (updatedElement.internalLayout) {
@@ -251,6 +257,7 @@ export function ZoneInternalPositionsManager({
 
   // Aplica cálculo de layout baseado nos rascunhos da zona
   const handleGenerateOrRecalculate = () => {
+    if (readOnly) return;
     const layout: ZoneInternalLayout = {
       method: methodDraft,
       rowDepthMeters: rowDepthDraft,
@@ -291,6 +298,7 @@ export function ZoneInternalPositionsManager({
 
   // Atualização de uma posição interna específica
   const handleUpdatePosition = (posId: string, patch: Partial<InternalPosition>) => {
+    if (readOnly) return;
     const updated = positions.map((p) => {
       if (p.id !== posId) return p;
       return {
@@ -308,6 +316,7 @@ export function ZoneInternalPositionsManager({
 
   // Exclusão individual de uma posição específica
   const handleDeletePosition = (posId: string) => {
+    if (readOnly) return;
     const updated = positions.filter((p) => p.id !== posId);
     onUpdateElement({
       ...element,
@@ -318,6 +327,7 @@ export function ZoneInternalPositionsManager({
 
   // Limpar dados de estoque da posição
   const handleClearPosition = (posId: string) => {
+    if (readOnly) return;
     handleUpdatePosition(posId, {
       sku: '',
       description: '',
@@ -328,6 +338,7 @@ export function ZoneInternalPositionsManager({
 
   // Copiar dados da zona-pai para a posição
   const handleCopyFromZone = (posId: string) => {
+    if (readOnly) return;
     handleUpdatePosition(posId, {
       sku: element.skuCode || '',
       description: element.notes || element.name,
@@ -361,6 +372,12 @@ export function ZoneInternalPositionsManager({
 
   return (
     <div className="space-y-3 pt-2 border-t border-slate-800">
+      {readOnly && (
+        <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg border border-slate-800 bg-slate-950/70 text-[10px] text-slate-400">
+          <Lock className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+          <span>Consulta em modo visitante — alterações de estoque exigem acesso de administrador.</span>
+        </div>
+      )}
       {/* ------------------------------------------------------------- */}
       {/* SELETOR DE DUAS ABAS PRINCIPAIS (ORGANIZAÇÃO LIMPA E DIRETA)   */}
       {/* ------------------------------------------------------------- */}
@@ -425,8 +442,9 @@ export function ZoneInternalPositionsManager({
                   <button
                     key={size.id}
                     type="button"
+                    disabled={readOnly}
                     onClick={() => handleApplyVolumePreset(size.id)}
-                    className={`p-2 rounded-lg text-left border transition-all flex items-start gap-1.5 ${
+                    className={`p-2 rounded-lg text-left border transition-all flex items-start gap-1.5 disabled:opacity-65 disabled:cursor-default ${
                       isSelected
                         ? 'border-red-500 bg-red-950/40 text-white font-bold ring-1 ring-red-500/30 shadow-xs'
                         : 'border-slate-800 bg-slate-950/60 text-slate-300 hover:border-slate-700 hover:bg-slate-950'
@@ -471,8 +489,9 @@ export function ZoneInternalPositionsManager({
               <div className="grid grid-cols-2 gap-1.5">
                 <button
                   type="button"
-                  onClick={() => setMethodDraft('horizontal_rows')}
-                  className={`p-1.5 rounded-lg text-left border transition-all ${
+                  disabled={readOnly}
+                  onClick={() => !readOnly && setMethodDraft('horizontal_rows')}
+                  className={`p-1.5 rounded-lg text-left border transition-all disabled:opacity-65 disabled:cursor-default ${
                     methodDraft === 'horizontal_rows'
                       ? 'border-red-500 bg-red-950/30 text-white font-bold'
                       : 'border-slate-800 bg-slate-900/50 text-slate-300 hover:bg-slate-900'
@@ -483,8 +502,9 @@ export function ZoneInternalPositionsManager({
                 </button>
                 <button
                   type="button"
-                  onClick={() => setMethodDraft('dimensioned_units')}
-                  className={`p-1.5 rounded-lg text-left border transition-all ${
+                  disabled={readOnly}
+                  onClick={() => !readOnly && setMethodDraft('dimensioned_units')}
+                  className={`p-1.5 rounded-lg text-left border transition-all disabled:opacity-65 disabled:cursor-default ${
                     methodDraft === 'dimensioned_units'
                       ? 'border-red-500 bg-red-950/30 text-white font-bold'
                       : 'border-slate-800 bg-slate-900/50 text-slate-300 hover:bg-slate-900'
@@ -495,8 +515,9 @@ export function ZoneInternalPositionsManager({
                 </button>
                 <button
                   type="button"
-                  onClick={() => setMethodDraft('grid')}
-                  className={`p-1.5 rounded-lg text-left border transition-all ${
+                  disabled={readOnly}
+                  onClick={() => !readOnly && setMethodDraft('grid')}
+                  className={`p-1.5 rounded-lg text-left border transition-all disabled:opacity-65 disabled:cursor-default ${
                     methodDraft === 'grid'
                       ? 'border-red-500 bg-red-950/30 text-white font-bold'
                       : 'border-slate-800 bg-slate-900/50 text-slate-300 hover:bg-slate-900'
@@ -507,8 +528,9 @@ export function ZoneInternalPositionsManager({
                 </button>
                 <button
                   type="button"
-                  onClick={() => setMethodDraft('custom')}
-                  className={`p-1.5 rounded-lg text-left border transition-all ${
+                  disabled={readOnly}
+                  onClick={() => !readOnly && setMethodDraft('custom')}
+                  className={`p-1.5 rounded-lg text-left border transition-all disabled:opacity-65 disabled:cursor-default ${
                     methodDraft === 'custom'
                       ? 'border-red-500 bg-red-950/30 text-white font-bold'
                       : 'border-slate-800 bg-slate-900/50 text-slate-300 hover:bg-slate-900'
@@ -530,9 +552,10 @@ export function ZoneInternalPositionsManager({
                     step="0.05"
                     min="0.30"
                     max="5.0"
+                    disabled={readOnly}
                     value={rowDepthDraft}
                     onChange={(e) => setRowDepthDraft(parseFloat(e.target.value) || 0.80)}
-                    className="w-full px-2 py-1 text-xs font-mono font-bold rounded border border-slate-700 bg-slate-950 text-slate-100"
+                    className="w-full px-2 py-1 text-xs font-mono font-bold rounded border border-slate-700 bg-slate-950 text-slate-100 disabled:opacity-65"
                   />
                 </div>
                 <div>
@@ -542,9 +565,10 @@ export function ZoneInternalPositionsManager({
                     step="0.05"
                     min="0.0"
                     max="1.0"
+                    disabled={readOnly}
                     value={marginDraft}
                     onChange={(e) => setMarginDraft(parseFloat(e.target.value) || 0)}
-                    className="w-full px-2 py-1 text-xs font-mono rounded border border-slate-700 bg-slate-950 text-slate-100"
+                    className="w-full px-2 py-1 text-xs font-mono rounded border border-slate-700 bg-slate-950 text-slate-100 disabled:opacity-65"
                   />
                 </div>
               </div>
@@ -560,9 +584,10 @@ export function ZoneInternalPositionsManager({
                       step="0.05"
                       min="0.40"
                       max="6.0"
+                      disabled={readOnly}
                       value={unitWidthDraft}
                       onChange={(e) => setUnitWidthDraft(parseFloat(e.target.value) || 1.0)}
-                      className="w-full px-2 py-1 text-xs font-mono font-bold rounded border border-slate-700 bg-slate-950 text-slate-100"
+                      className="w-full px-2 py-1 text-xs font-mono font-bold rounded border border-slate-700 bg-slate-950 text-slate-100 disabled:opacity-65"
                     />
                   </div>
                   <div>
@@ -572,9 +597,10 @@ export function ZoneInternalPositionsManager({
                       step="0.05"
                       min="0.40"
                       max="6.0"
+                      disabled={readOnly}
                       value={unitDepthDraft}
                       onChange={(e) => setUnitDepthDraft(parseFloat(e.target.value) || 1.0)}
-                      className="w-full px-2 py-1 text-xs font-mono font-bold rounded border border-slate-700 bg-slate-950 text-slate-100"
+                      className="w-full px-2 py-1 text-xs font-mono font-bold rounded border border-slate-700 bg-slate-950 text-slate-100 disabled:opacity-65"
                     />
                   </div>
                 </div>
@@ -587,9 +613,10 @@ export function ZoneInternalPositionsManager({
                       step="0.02"
                       min="0.0"
                       max="0.5"
+                      disabled={readOnly}
                       value={clearanceDraft}
                       onChange={(e) => setClearanceDraft(parseFloat(e.target.value) || 0)}
-                      className="w-full px-2 py-1 text-xs font-mono rounded border border-slate-700 bg-slate-950 text-slate-100"
+                      className="w-full px-2 py-1 text-xs font-mono rounded border border-slate-700 bg-slate-950 text-slate-100 disabled:opacity-65"
                     />
                   </div>
                   <div>
@@ -599,9 +626,10 @@ export function ZoneInternalPositionsManager({
                       step="0.05"
                       min="0.0"
                       max="1.0"
+                      disabled={readOnly}
                       value={marginDraft}
                       onChange={(e) => setMarginDraft(parseFloat(e.target.value) || 0)}
-                      className="w-full px-2 py-1 text-xs font-mono rounded border border-slate-700 bg-slate-950 text-slate-100"
+                      className="w-full px-2 py-1 text-xs font-mono rounded border border-slate-700 bg-slate-950 text-slate-100 disabled:opacity-65"
                     />
                   </div>
                 </div>
@@ -616,9 +644,10 @@ export function ZoneInternalPositionsManager({
                     type="number"
                     min="1"
                     max="30"
+                    disabled={readOnly}
                     value={customColsDraft}
                     onChange={(e) => setCustomColsDraft(parseInt(e.target.value, 10) || 1)}
-                    className="w-full px-2 py-1 text-xs font-mono font-bold rounded border border-slate-700 bg-slate-950 text-slate-100"
+                    className="w-full px-2 py-1 text-xs font-mono font-bold rounded border border-slate-700 bg-slate-950 text-slate-100 disabled:opacity-65"
                   />
                 </div>
                 <div>
@@ -627,9 +656,10 @@ export function ZoneInternalPositionsManager({
                     type="number"
                     min="1"
                     max="30"
+                    disabled={readOnly}
                     value={customRowsDraft}
                     onChange={(e) => setCustomRowsDraft(parseInt(e.target.value, 10) || 1)}
-                    className="w-full px-2 py-1 text-xs font-mono font-bold rounded border border-slate-700 bg-slate-950 text-slate-100"
+                    className="w-full px-2 py-1 text-xs font-mono font-bold rounded border border-slate-700 bg-slate-950 text-slate-100 disabled:opacity-65"
                   />
                 </div>
               </div>
@@ -643,16 +673,18 @@ export function ZoneInternalPositionsManager({
                 </label>
                 <input
                   type="text"
+                  disabled={readOnly}
                   value={prefixDraft}
                   onChange={(e) => setPrefixDraft(e.target.value.toUpperCase())}
                   placeholder="Ex: GEL, P ou deixe vazio (0001...)"
-                  className="w-full px-2 py-1 text-xs font-mono font-bold rounded border border-slate-700 bg-slate-950 text-red-400"
+                  className="w-full px-2 py-1 text-xs font-mono font-bold rounded border border-slate-700 bg-slate-950 text-red-400 disabled:opacity-65"
                 />
               </div>
 
-              <label className="flex items-center gap-2 p-2 rounded bg-slate-900 border border-slate-800 text-[11px] text-slate-300 cursor-pointer">
+              <label className={`flex items-center gap-2 p-2 rounded bg-slate-900 border border-slate-800 text-[11px] text-slate-300 ${readOnly ? 'opacity-65 cursor-default' : 'cursor-pointer'}`}>
                 <input
                   type="checkbox"
+                  disabled={readOnly}
                   checked={sameCodePerRowDraft}
                   onChange={(e) => setSameCodePerRowDraft(e.target.checked)}
                   className="rounded border-slate-700 text-red-600 focus:ring-red-500"
@@ -661,14 +693,16 @@ export function ZoneInternalPositionsManager({
               </label>
             </div>
 
-            <button
-              type="button"
-              onClick={handleGenerateOrRecalculate}
-              className="w-full py-2 px-3 rounded-lg bg-red-600 hover:bg-red-500 text-white font-bold flex items-center justify-center gap-1.5 shadow-md transition-colors"
-            >
-              <RefreshCw className="w-3.5 h-3.5" />
-              <span>Recalcular Divisões da Zona</span>
-            </button>
+            {!readOnly && (
+              <button
+                type="button"
+                onClick={handleGenerateOrRecalculate}
+                className="w-full py-2 px-3 rounded-lg bg-red-600 hover:bg-red-500 text-white font-bold flex items-center justify-center gap-1.5 shadow-md transition-colors"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                <span>Recalcular Divisões da Zona</span>
+              </button>
+            )}
           </div>
 
           {/* INDICADORES DE OCUPAÇÃO DA ZONA */}
@@ -730,48 +764,50 @@ export function ZoneInternalPositionsManager({
                   </div>
                 ))}
               </div>
-              <div className="flex gap-1.5 pt-1">
-                <button
-                  type="button"
-                  onClick={() => {
-                    const newPositions = [...positions];
-                    const remainingOvf: InternalPosition[] = [];
-                    for (const ovf of element.overflowPositions || []) {
-                      const empty = newPositions.find((p) => p.status === 'empty' && !p.sku);
-                      if (empty) {
-                        empty.sku = ovf.sku;
-                        empty.description = ovf.description;
-                        empty.quantity = ovf.quantity;
-                        empty.unit = ovf.unit;
-                        empty.status = 'occupied';
-                      } else {
-                        remainingOvf.push(ovf);
+              {!readOnly && (
+                <div className="flex gap-1.5 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const newPositions = [...positions];
+                      const remainingOvf: InternalPosition[] = [];
+                      for (const ovf of element.overflowPositions || []) {
+                        const empty = newPositions.find((p) => p.status === 'empty' && !p.sku);
+                        if (empty) {
+                          empty.sku = ovf.sku;
+                          empty.description = ovf.description;
+                          empty.quantity = ovf.quantity;
+                          empty.unit = ovf.unit;
+                          empty.status = 'occupied';
+                        } else {
+                          remainingOvf.push(ovf);
+                        }
                       }
-                    }
-                    onUpdateElement({
-                      ...element,
-                      internalPositions: newPositions,
-                      overflowPositions: remainingOvf.length > 0 ? remainingOvf : undefined,
-                    });
-                  }}
-                  className="flex-1 py-1.5 px-2 rounded bg-amber-600 hover:bg-amber-500 text-white font-bold text-[10px] transition-colors"
-                >
-                  Realocar em Vagas Livres
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    onUpdateElement({
-                      ...element,
-                      overflowPositions: undefined,
-                    });
-                  }}
-                  className="py-1.5 px-2.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] transition-colors"
-                  title="Dispensar lista de overflow"
-                >
-                  Dispensar
-                </button>
-              </div>
+                      onUpdateElement({
+                        ...element,
+                        internalPositions: newPositions,
+                        overflowPositions: remainingOvf.length > 0 ? remainingOvf : undefined,
+                      });
+                    }}
+                    className="flex-1 py-1.5 px-2 rounded bg-amber-600 hover:bg-amber-500 text-white font-bold text-[10px] transition-colors"
+                  >
+                    Realocar em Vagas Livres
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onUpdateElement({
+                        ...element,
+                        overflowPositions: undefined,
+                      });
+                    }}
+                    className="py-1.5 px-2.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] transition-colors"
+                    title="Dispensar lista de overflow"
+                  >
+                    Dispensar
+                  </button>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -871,6 +907,7 @@ export function ZoneInternalPositionsManager({
                       </label>
                       <input
                         type="text"
+                        disabled={readOnly}
                         placeholder="Ex: GEL-BRST-440"
                         value={activePosition.sku || ''}
                         onChange={(e) => {
@@ -880,7 +917,7 @@ export function ZoneInternalPositionsManager({
                             status: val ? 'occupied' : activePosition.status,
                           });
                         }}
-                        className="w-full px-2 py-1 text-xs font-mono font-bold rounded bg-slate-950 border border-slate-700 text-slate-100 focus:border-amber-500 focus:outline-none"
+                        className="w-full px-2 py-1 text-xs font-mono font-bold rounded bg-slate-950 border border-slate-700 text-slate-100 focus:border-amber-500 focus:outline-none disabled:opacity-65"
                       />
                     </div>
                     <div>
@@ -890,10 +927,11 @@ export function ZoneInternalPositionsManager({
                       <input
                         type="number"
                         min="0"
+                        disabled={readOnly}
                         placeholder="1"
                         value={activePosition.quantity ?? ''}
                         onChange={(e) => handleUpdateRowPositions(activePosition.code, { quantity: parseInt(e.target.value, 10) || 0 })}
-                        className="w-full px-2 py-1 text-xs font-mono font-bold rounded bg-slate-950 border border-slate-700 text-slate-100 focus:border-amber-500 focus:outline-none"
+                        className="w-full px-2 py-1 text-xs font-mono font-bold rounded bg-slate-950 border border-slate-700 text-slate-100 focus:border-amber-500 focus:outline-none disabled:opacity-65"
                       />
                     </div>
                   </div>
@@ -904,10 +942,11 @@ export function ZoneInternalPositionsManager({
                     </label>
                     <input
                       type="text"
+                      disabled={readOnly}
                       placeholder="Ex: Refrigerador Frost Free Duplex"
                       value={activePosition.description || ''}
                       onChange={(e) => handleUpdateRowPositions(activePosition.code, { description: e.target.value })}
-                      className="w-full px-2 py-1 text-xs rounded bg-slate-950 border border-slate-700 text-slate-200 focus:border-amber-500 focus:outline-none"
+                      className="w-full px-2 py-1 text-xs rounded bg-slate-950 border border-slate-700 text-slate-200 focus:border-amber-500 focus:outline-none disabled:opacity-65"
                     />
                   </div>
 
@@ -918,8 +957,9 @@ export function ZoneInternalPositionsManager({
                     <div className="grid grid-cols-3 gap-1.5">
                       <button
                         type="button"
+                        disabled={readOnly}
                         onClick={() => handleUpdateRowPositions(activePosition.code, { status: 'empty' })}
-                        className={`py-1 px-2 rounded text-xs font-semibold border flex items-center justify-center gap-1 ${
+                        className={`py-1 px-2 rounded text-xs font-semibold border flex items-center justify-center gap-1 disabled:opacity-65 disabled:cursor-default ${
                           activePosition.status === 'empty'
                             ? 'bg-slate-800 border-slate-500 text-white'
                             : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200'
@@ -930,8 +970,9 @@ export function ZoneInternalPositionsManager({
                       </button>
                       <button
                         type="button"
+                        disabled={readOnly}
                         onClick={() => handleUpdateRowPositions(activePosition.code, { status: 'occupied' })}
-                        className={`py-1 px-2 rounded text-xs font-semibold border flex items-center justify-center gap-1 ${
+                        className={`py-1 px-2 rounded text-xs font-semibold border flex items-center justify-center gap-1 disabled:opacity-65 disabled:cursor-default ${
                           activePosition.status === 'occupied'
                             ? 'bg-emerald-950 border-emerald-500 text-emerald-300'
                             : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-emerald-400'
@@ -942,8 +983,9 @@ export function ZoneInternalPositionsManager({
                       </button>
                       <button
                         type="button"
+                        disabled={readOnly}
                         onClick={() => handleUpdateRowPositions(activePosition.code, { status: 'reserved' })}
-                        className={`py-1 px-2 rounded text-xs font-semibold border flex items-center justify-center gap-1 ${
+                        className={`py-1 px-2 rounded text-xs font-semibold border flex items-center justify-center gap-1 disabled:opacity-65 disabled:cursor-default ${
                           activePosition.status === 'reserved'
                             ? 'bg-amber-950 border-amber-500 text-amber-300'
                             : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-amber-400'
@@ -962,7 +1004,7 @@ export function ZoneInternalPositionsManager({
               {/* ----------------------------------------------------------- */}
               <div className="space-y-2.5 pt-1 border-t border-slate-800">
                 <span className="text-[11px] font-bold text-slate-200 block">
-                  Ajustes da Célula Individual
+                  {readOnly ? 'Detalhes da Célula Individual' : 'Ajustes da Célula Individual'}
                 </span>
 
                 {/* Código e Rótulo Individual */}
@@ -973,10 +1015,11 @@ export function ZoneInternalPositionsManager({
                     </label>
                     <input
                       type="text"
+                      disabled={readOnly}
                       value={activePosition.code}
                       onChange={(e) => handleUpdatePosition(activePosition.id, { code: e.target.value.toUpperCase() })}
                       placeholder="Ex: 0058, 102, GEL-01"
-                      className="w-full px-2 py-1 text-xs font-mono font-bold rounded bg-slate-950 border border-slate-700 text-red-400 focus:border-red-500 focus:outline-none"
+                      className="w-full px-2 py-1 text-xs font-mono font-bold rounded bg-slate-950 border border-slate-700 text-red-400 focus:border-red-500 focus:outline-none disabled:opacity-65"
                     />
                   </div>
                   <div>
@@ -985,10 +1028,11 @@ export function ZoneInternalPositionsManager({
                     </label>
                     <input
                       type="text"
+                      disabled={readOnly}
                       value={activePosition.label || ''}
                       onChange={(e) => handleUpdatePosition(activePosition.id, { label: e.target.value })}
                       placeholder="Ex: Palete Frontal"
-                      className="w-full px-2 py-1 text-xs rounded bg-slate-950 border border-slate-700 text-slate-200 focus:border-red-500 focus:outline-none"
+                      className="w-full px-2 py-1 text-xs rounded bg-slate-950 border border-slate-700 text-slate-200 focus:border-red-500 focus:outline-none disabled:opacity-65"
                     />
                   </div>
                 </div>
@@ -1001,8 +1045,9 @@ export function ZoneInternalPositionsManager({
                   <div className="grid grid-cols-3 gap-1.5">
                     <button
                       type="button"
+                      disabled={readOnly}
                       onClick={() => handleUpdatePosition(activePosition.id, { status: 'empty' })}
-                      className={`py-1 px-2 rounded-lg text-xs font-semibold border flex items-center justify-center gap-1 transition-all ${
+                      className={`py-1 px-2 rounded-lg text-xs font-semibold border flex items-center justify-center gap-1 transition-all disabled:opacity-65 disabled:cursor-default ${
                         activePosition.status === 'empty'
                           ? 'bg-slate-800 border-slate-500 text-white'
                           : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200'
@@ -1013,8 +1058,9 @@ export function ZoneInternalPositionsManager({
                     </button>
                     <button
                       type="button"
+                      disabled={readOnly}
                       onClick={() => handleUpdatePosition(activePosition.id, { status: 'occupied' })}
-                      className={`py-1 px-2 rounded-lg text-xs font-semibold border flex items-center justify-center gap-1 transition-all ${
+                      className={`py-1 px-2 rounded-lg text-xs font-semibold border flex items-center justify-center gap-1 transition-all disabled:opacity-65 disabled:cursor-default ${
                         activePosition.status === 'occupied'
                           ? 'bg-emerald-950 border-emerald-500 text-emerald-300'
                           : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-emerald-400'
@@ -1025,8 +1071,9 @@ export function ZoneInternalPositionsManager({
                     </button>
                     <button
                       type="button"
+                      disabled={readOnly}
                       onClick={() => handleUpdatePosition(activePosition.id, { status: 'reserved' })}
-                      className={`py-1 px-2 rounded-lg text-xs font-semibold border flex items-center justify-center gap-1 transition-all ${
+                      className={`py-1 px-2 rounded-lg text-xs font-semibold border flex items-center justify-center gap-1 transition-all disabled:opacity-65 disabled:cursor-default ${
                         activePosition.status === 'reserved'
                           ? 'bg-amber-950 border-amber-500 text-amber-300'
                           : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-amber-400'
@@ -1044,9 +1091,10 @@ export function ZoneInternalPositionsManager({
                     Porte do Volume Alocado
                   </label>
                   <select
+                    disabled={readOnly}
                     value={activePosition.productSize || element.productSize || 'pallet'}
                     onChange={(e) => handleUpdatePosition(activePosition.id, { productSize: e.target.value as ProductSize })}
-                    className="w-full px-2 py-1 text-xs rounded bg-slate-950 border border-slate-700 text-slate-200 focus:border-red-500 focus:outline-none"
+                    className="w-full px-2 py-1 text-xs rounded bg-slate-950 border border-slate-700 text-slate-200 focus:border-red-500 focus:outline-none disabled:opacity-65"
                   >
                     {PRODUCT_SIZES.map((s) => (
                       <option key={s.id} value={s.id}>
@@ -1064,6 +1112,7 @@ export function ZoneInternalPositionsManager({
                     </label>
                     <input
                       type="text"
+                      disabled={readOnly}
                       placeholder="Ex: GEL-BRST-440"
                       value={activePosition.sku || ''}
                       onChange={(e) => {
@@ -1073,7 +1122,7 @@ export function ZoneInternalPositionsManager({
                           status: val ? 'occupied' : activePosition.status,
                         });
                       }}
-                      className="w-full px-2 py-1 text-xs font-mono rounded bg-slate-950 border border-slate-700 text-slate-200 placeholder-slate-600 focus:border-red-500 focus:outline-none"
+                      className="w-full px-2 py-1 text-xs font-mono rounded bg-slate-950 border border-slate-700 text-slate-200 placeholder-slate-600 focus:border-red-500 focus:outline-none disabled:opacity-65"
                     />
                   </div>
                   <div>
@@ -1083,10 +1132,11 @@ export function ZoneInternalPositionsManager({
                     <input
                       type="number"
                       min="0"
+                      disabled={readOnly}
                       placeholder="0"
                       value={activePosition.quantity ?? ''}
                       onChange={(e) => handleUpdatePosition(activePosition.id, { quantity: parseInt(e.target.value, 10) || 0 })}
-                      className="w-full px-2 py-1 text-xs font-mono font-bold rounded bg-slate-950 border border-slate-700 text-slate-200 focus:border-red-500 focus:outline-none"
+                      className="w-full px-2 py-1 text-xs font-mono font-bold rounded bg-slate-950 border border-slate-700 text-slate-200 focus:border-red-500 focus:outline-none disabled:opacity-65"
                     />
                   </div>
                 </div>
@@ -1097,45 +1147,48 @@ export function ZoneInternalPositionsManager({
                   </label>
                   <input
                     type="text"
+                    disabled={readOnly}
                     placeholder="Ex: Refrigerador Frost Free Duplex"
                     value={activePosition.description || ''}
                     onChange={(e) => handleUpdatePosition(activePosition.id, { description: e.target.value })}
-                    className="w-full px-2 py-1 text-xs rounded bg-slate-950 border border-slate-700 text-slate-200 placeholder-slate-600 focus:border-red-500 focus:outline-none"
+                    className="w-full px-2 py-1 text-xs rounded bg-slate-950 border border-slate-700 text-slate-200 placeholder-slate-600 focus:border-red-500 focus:outline-none disabled:opacity-65"
                   />
                 </div>
 
-                {/* Ações Rápidas da Célula */}
-                <div className="pt-2 border-t border-slate-800 flex items-center justify-between gap-2">
-                  <button
-                    type="button"
-                    onClick={() => handleCopyFromZone(activePosition.id)}
-                    className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-[11px] font-semibold text-slate-300 flex items-center gap-1 transition-colors"
-                    title="Copiar dados da zona pai"
-                  >
-                    <Copy className="w-3 h-3 text-red-400" />
-                    <span>Copiar da Zona</span>
-                  </button>
+                {/* Ações Rápidas da Célula (apenas Admin) */}
+                {!readOnly && (
+                  <div className="pt-2 border-t border-slate-800 flex items-center justify-between gap-2">
+                    <button
+                      type="button"
+                      onClick={() => handleCopyFromZone(activePosition.id)}
+                      className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-[11px] font-semibold text-slate-300 flex items-center gap-1 transition-colors"
+                      title="Copiar dados da zona pai"
+                    >
+                      <Copy className="w-3 h-3 text-red-400" />
+                      <span>Copiar da Zona</span>
+                    </button>
 
-                  <button
-                    type="button"
-                    onClick={() => handleClearPosition(activePosition.id)}
-                    className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-[11px] font-semibold text-amber-400 flex items-center gap-1 transition-colors"
-                    title="Liberar espaço da célula"
-                  >
-                    <PackageX className="w-3 h-3" />
-                    <span>Liberar</span>
-                  </button>
+                    <button
+                      type="button"
+                      onClick={() => handleClearPosition(activePosition.id)}
+                      className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-[11px] font-semibold text-amber-400 flex items-center gap-1 transition-colors"
+                      title="Liberar espaço da célula"
+                    >
+                      <PackageX className="w-3 h-3" />
+                      <span>Liberar</span>
+                    </button>
 
-                  <button
-                    type="button"
-                    onClick={() => handleDeletePosition(activePosition.id)}
-                    className="px-2 py-1 rounded bg-red-950/50 hover:bg-red-900/50 text-[11px] font-semibold text-red-300 border border-red-800/40 flex items-center gap-1 transition-colors"
-                    title="Excluir divisão"
-                  >
-                    <Trash2 className="w-3 h-3" />
-                    <span>Excluir</span>
-                  </button>
-                </div>
+                    <button
+                      type="button"
+                      onClick={() => handleDeletePosition(activePosition.id)}
+                      className="px-2 py-1 rounded bg-red-950/50 hover:bg-red-900/50 text-[11px] font-semibold text-red-300 border border-red-800/40 flex items-center gap-1 transition-colors"
+                      title="Excluir divisão"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                      <span>Excluir</span>
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
           ) : (
@@ -1217,7 +1270,11 @@ export function ZoneInternalPositionsManager({
                           >
                             {pos.status === 'occupied' ? 'OCUPADA' : pos.status === 'reserved' ? 'RESERVADA' : 'LIVRE'}
                           </span>
-                          <Pencil className="w-3 h-3 text-slate-500 group-hover:text-red-400 transition-colors" />
+                          {readOnly ? (
+                            <Eye className="w-3 h-3 text-slate-500 group-hover:text-sky-400 transition-colors" />
+                          ) : (
+                            <Pencil className="w-3 h-3 text-slate-500 group-hover:text-red-400 transition-colors" />
+                          )}
                         </div>
                       </div>
 

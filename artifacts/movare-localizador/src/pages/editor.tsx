@@ -7,27 +7,29 @@ import {
   Lock, Unlock, RotateCw, Sparkles, SlidersHorizontal, ArrowLeftRight,
   Maximize2, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Tag, Target,
   Magnet, Sliders, PanelRightClose, PanelRightOpen, Shield, ShieldCheck,
-  CheckSquare, Square, AlignLeft, AlignCenter, AlignRight, Users, Eye,
-  Camera as CameraIcon
+  CheckSquare, Square,  AlignLeft, AlignCenter, Users, Eye,
+  Camera as CameraIcon, Cloud, CloudOff, LogIn
 } from 'lucide-react';
 import {
   initialAreas, parseBackup, createId, DEFAULT_SCALE_RATIO, DEFAULT_WIDTH_METERS, DEFAULT_HEIGHT_METERS,
   WMS_COLOR_PALETTE, PRODUCT_SIZES, PRODUCT_CATEGORIES, getAreaBounds,
-  type DrawingElement, type FloorArea, type RackSlot, type ProductSize
+  type DrawingElement, type FloorArea, type ProductSize
 } from '../editor-model';
 import { snapMovedElement, snapPointToElements, snapResizedRectangle, type AlignmentGuide } from '../alignment';
-import { createGridDividers, createGridCells, parseTrackProportions, divideAreaIntoCells } from '../grid-geometry';
 import {
   isSolidSpace,
   getSolidObstacles,
   resolveSpacePhysics,
   resolveGroupPhysics,
   alignGroupElements,
-  getGroupBoundingBox,
-  boxesOverlap,
-  type Box,
 } from '../physics';
-import { loadAreas, saveAreas } from '../local-store';
+import { useAuth } from '../hooks/use-auth';
+import { useSharedMap } from '../hooks/use-shared-map';
+import { AuthDialog } from '../components/auth/auth-dialog';
+import { AdminPanelDialog } from '../components/auth/admin-panel-dialog';
+import { MigrationDialog } from '../components/auth/migration-dialog';
+import { ConflictDialog } from '../components/auth/conflict-dialog';
+import { ReadOnlyNoticeBanner } from '../components/permissions/permission-guard';
 import { CADRuler } from '../components/cad-ruler';
 import { Minimap } from '../components/minimap';
 import { WMSSearchDialog, type SearchResult } from '../components/wms-search-dialog';
@@ -47,10 +49,7 @@ import {
 } from '../components/geographic-legend';
 import {
   recalculatePositionsOnZoneResize,
-  getDefaultLayoutForCategory,
-  calculateZoneInternalPositions,
   applyVolumePresetToZone,
-  sanitizeZonePositions,
   generateStablePositionId,
 } from '../zone-internal-positions';
 
@@ -81,11 +80,33 @@ export default function Editor() {
     return (localStorage.getItem('movare-theme') as 'dark' | 'light') || 'dark';
   });
 
-  const [areas, setAreas] = useState<FloorArea[]>(() => clone(initialAreas));
-  const areasRef = useRef(areas);
-  areasRef.current = areas;
-
   const [activeId, setActiveId] = useState(initialAreas[0].id);
+  const [toast, setToast] = useState('');
+
+  // Autenticação e permissões reais via Supabase Auth
+  const auth = useAuth();
+  const isAdmin = auth.isAdmin;
+
+  // Mapa central compartilhado com Realtime e controle otimista de concorrência
+  const sharedMap = useSharedMap({
+    isAdmin,
+    userId: auth.user?.id ?? null,
+    activeId,
+    onSyncActiveId: setActiveId,
+    onNotify: setToast,
+  });
+
+  const {
+    areas,
+    areasRef,
+    history,
+    future,
+    recordAreas,
+    patchActive,
+    undo,
+    redo,
+  } = sharedMap;
+
   const activeArea = areas.find((area) => area.id === activeId) ?? areas[0] ?? initialAreas[0];
   const scaleRatio = activeArea?.scaleRatio ?? DEFAULT_SCALE_RATIO;
 
@@ -135,7 +156,6 @@ export default function Editor() {
   const [freeMoveMode, setFreeMoveMode] = useState(false);
   const [desktopSidebarOpen, setDesktopSidebarOpen] = useState(true);
   const [snapEnabled, setSnapEnabled] = useState(true);
-  const [showActionBar, setShowActionBar] = useState(false);
 
   const [camera, setCamera] = useState<Camera>(EMPTY_CAMERA);
   const cameraRef = useRef(camera);
@@ -262,18 +282,11 @@ export default function Editor() {
   const [selectedPositionId, setSelectedPositionId] = useState<string | null>(null);
   const pendingCellTapRef = useRef<{ pos: any; zoneId: string; startScreen: Point; pointerId: number } | null>(null);
 
-  const [history, setHistory] = useState<FloorArea[][]>([]);
-  const historyRef = useRef<FloorArea[][]>([]);
-  const [future, setFuture] = useState<FloorArea[][]>([]);
-  const futureRef = useRef<FloorArea[][]>([]);
-
-  const [saveStatus, setSaveStatus] = useState<'loading' | 'saved' | 'saving' | 'error'>('loading');
-  const [storageReady, setStorageReady] = useState(false);
-
   // Modais do Sistema
   const [modal, setModal] = useState<
     'delete' | 'rename' | 'new-area' | 'import' | 'grid' |
-    'search' | 'scale' | 'warehouse-size' | 'layers' | 'spotlight' | 'shortcuts' | 'rack-gen' | 'png-export' | null
+    'search' | 'scale' | 'warehouse-size' | 'layers' | 'spotlight' | 'shortcuts' | 'rack-gen' | 'png-export' |
+    'auth' | 'access-panel' | null
   >(null);
 
   // Modo de Edição Individual de Espaço (Sub-Mapa / Foco Isolado)
@@ -282,7 +295,6 @@ export default function Editor() {
 
   const [renameDraft, setRenameDraft] = useState('');
   const [queuedImport, setQueuedImport] = useState<FloorArea[] | null>(null);
-  const [toast, setToast] = useState('');
   const [showSplashScreen, setShowSplashScreen] = useState(true);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const canvasSizeRef = useRef({ width: 0, height: 0 });
@@ -296,66 +308,29 @@ export default function Editor() {
     });
   }, []);
 
-  const recordAreas = useCallback((next: FloorArea[]) => {
-    const before = clone(areasRef.current);
-    historyRef.current = [...historyRef.current.slice(-59), before];
-    futureRef.current = [];
-    setHistory(historyRef.current);
-    setFuture([]);
-    areasRef.current = next;
-    setAreas(next);
-  }, []);
-
-  const patchActive = useCallback((patcher: (area: FloorArea) => FloorArea) => {
-    recordAreas(areasRef.current.map((area) => (area.id === activeId ? patcher(area) : area)));
-  }, [activeId, recordAreas]);
-
-  // Carrega áreas salvas
+  // Garante transição segura para modo somente leitura caso o usuário não seja administrador
   useEffect(() => {
-    let alive = true;
-    loadAreas()
-      .then((stored) => {
-        if (!alive) return;
-        const sanitized = stored.map((area) => ({
-          ...area,
-          elements: area.elements.map((el) => {
-            if (el.type === 'rectangle' && el.internalPositions?.length) {
-              return {
-                ...el,
-                internalPositions: sanitizeZonePositions(el.id, el.internalPositions),
-              };
-            }
-            return el;
-          }),
-        }));
-        areasRef.current = sanitized;
-        setAreas(sanitized);
-        if (sanitized[0]?.id) setActiveId(sanitized[0].id);
-        setStorageReady(true);
-        setSaveStatus('saved');
-      })
-      .catch(() => {
-        if (!alive) return;
-        setSaveStatus('error');
-        setToast('Não foi possível ler o armazenamento deste dispositivo.');
-      });
-    return () => { alive = false; };
-  }, []);
-
-  // Salva automaticamente com debounce
-  useEffect(() => {
-    if (!storageReady) return;
-    setSaveStatus('saving');
-    const timer = window.setTimeout(() => {
-      saveAreas(areas)
-        .then(() => setSaveStatus('saved'))
-        .catch(() => {
-          setSaveStatus('error');
-          setToast('Falha ao salvar no armazenamento local.');
-        });
-    }, 400);
-    return () => window.clearTimeout(timer);
-  }, [areas, storageReady]);
+    if (!isAdmin) {
+      setTool((current) =>
+        current === 'move' || current === 'rectangle' || current === 'divider' || current === 'corridor'
+          ? 'select'
+          : current
+      );
+      setFreeMoveMode(false);
+      setIsMultiSelectMode(false);
+      setModal((current) =>
+        current === 'delete' ||
+        current === 'rename' ||
+        current === 'new-area' ||
+        current === 'import' ||
+        current === 'scale' ||
+        current === 'warehouse-size' ||
+        current === 'rack-gen'
+          ? null
+          : current
+      );
+    }
+  }, [isAdmin]);
 
   // FitPlan com controle seguro de referência
   const fitPlan = useCallback(() => {
@@ -441,6 +416,18 @@ export default function Editor() {
     return () => window.clearTimeout(timer);
   }, [toast]);
 
+  const selectToolSafe = useCallback(
+    (nextTool: Tool) => {
+      if (!isAdmin && (nextTool === 'move' || nextTool === 'rectangle' || nextTool === 'divider' || nextTool === 'corridor')) {
+        setToast('Modo Visitante: ferramentas de edição restritas a administradores.');
+        return;
+      }
+      setTool(nextTool);
+      setMeasureLine(null);
+    },
+    [isAdmin]
+  );
+
   // Atalhos de teclado
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -464,6 +451,7 @@ export default function Editor() {
       }
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
         e.preventDefault();
+        if (!isAdmin) return;
         if (e.shiftKey) redo();
         else undo();
         return;
@@ -471,13 +459,13 @@ export default function Editor() {
 
       switch (e.key.toLowerCase()) {
         case 'v': setTool('select'); setMeasureLine(null); break;
-        case 'm': setTool('move'); setMeasureLine(null); break;
+        case 'm': if (isAdmin) { setTool('move'); setMeasureLine(null); } break;
         case 'h': setTool('pan'); setMeasureLine(null); break;
-        case 'r': setTool('rectangle'); setMeasureLine(null); break;
-        case 'c': setTool('corridor'); setMeasureLine(null); break;
+        case 'r': if (isAdmin) { setTool('rectangle'); setMeasureLine(null); } break;
+        case 'c': if (isAdmin) { setTool('corridor'); setMeasureLine(null); } break;
         case 't': setTool('measure'); break;
         case 'l':
-          if (selected) toggleLockSelected();
+          if (isAdmin && selected) toggleLockSelected();
           break;
         case 'escape':
           setSelectedId(null);
@@ -489,45 +477,45 @@ export default function Editor() {
           setMobileMenuOpen(false);
           break;
         case 's':
-          setSnapEnabled((prev) => !prev);
+          if (isAdmin) setSnapEnabled((prev) => !prev);
           break;
         case 'f':
-          setFreeMoveMode((prev) => !prev);
+          if (isAdmin) setFreeMoveMode((prev) => !prev);
           break;
         case 'arrowleft':
-          if (selected && !selected.locked) {
+          if (isAdmin && selected && !selected.locked) {
             e.preventDefault();
             nudgeSelected(e.shiftKey ? -2 : -0.5, 0);
           }
           break;
         case 'arrowright':
-          if (selected && !selected.locked) {
+          if (isAdmin && selected && !selected.locked) {
             e.preventDefault();
             nudgeSelected(e.shiftKey ? 2 : 0.5, 0);
           }
           break;
         case 'arrowup':
-          if (selected && !selected.locked) {
+          if (isAdmin && selected && !selected.locked) {
             e.preventDefault();
             nudgeSelected(0, e.shiftKey ? -2 : -0.5);
           }
           break;
         case 'arrowdown':
-          if (selected && !selected.locked) {
+          if (isAdmin && selected && !selected.locked) {
             e.preventDefault();
             nudgeSelected(0, e.shiftKey ? 2 : 0.5);
           }
           break;
         case 'delete':
         case 'backspace':
-          if (selected && !selected.locked) setModal('delete');
+          if (isAdmin && selected && !selected.locked) setModal('delete');
           break;
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selected]);
+  }, [isAdmin, redo, selected, undo]);
 
   function pointToWorld(clientX: number, clientY: number): Point {
     const rect = canvasRef.current?.getBoundingClientRect();
@@ -588,6 +576,10 @@ export default function Editor() {
   }
 
   function replaceItem(item: DrawingElement) {
+    if (!isAdmin) {
+      setToast('Modo Visitante: somente leitura.');
+      return;
+    }
     patchActive((area) => ({
       ...area,
       elements: area.elements.map((candidate) => (candidate.id === item.id ? item : candidate)),
@@ -596,7 +588,7 @@ export default function Editor() {
 
   // Alterna Bloqueio do Objeto
   function toggleLockSelected() {
-    if (!selected) return;
+    if (!isAdmin || !selected) return;
     const isNowLocked = !selected.locked;
     replaceItem({ ...selected, locked: isNowLocked });
     setToast(isNowLocked ? `🔒 "${selected.name}" bloqueado contra movimentação` : `🔓 "${selected.name}" desbloqueado para edição`);
@@ -604,7 +596,7 @@ export default function Editor() {
 
   // Rotação Tátil Rápida (90 graus)
   function rotateSelectedBy(degrees: number) {
-    if (!selected || selected.locked) return;
+    if (!isAdmin || !selected || selected.locked) return;
     const currentRot = selected.rotation || 0;
     const newRot = (Math.round((currentRot + degrees) / 90) * 90) % 360;
     replaceItem({ ...selected, rotation: (newRot + 360) % 360 });
@@ -613,7 +605,7 @@ export default function Editor() {
 
   // Ajuste Tátil Fino de Posição (D-Pad Mobile)
   function nudgeSelected(dxM: number, dyM: number) {
-    if (!selected || selected.locked) return;
+    if (!isAdmin || !selected || selected.locked) return;
     const dxPx = dxM * scaleRatio;
     const dyPx = dyM * scaleRatio;
     replaceItem({
@@ -621,35 +613,6 @@ export default function Editor() {
       x: Math.max(0, Math.min(worldWidth - selected.width, selected.x + dxPx)),
       y: Math.max(0, Math.min(worldHeight - selected.height, selected.y + dyPx)),
     });
-  }
-
-  // Ajuste Tátil Fino de Dimensão (+ / - metros)
-  function tactileResize(dimension: 'width' | 'height', deltaM: number) {
-    if (!selected || selected.locked) return;
-    const deltaPx = deltaM * scaleRatio;
-    let updatedItem: DrawingElement;
-    if (dimension === 'width') {
-      const newW = Math.max(scaleRatio * 0.5, selected.width + deltaPx);
-      updatedItem = { ...selected, width: newW };
-    } else {
-      const newH = Math.max(scaleRatio * 0.5, selected.height + deltaPx);
-      updatedItem = { ...selected, height: newH };
-    }
-
-    if (updatedItem.type === 'rectangle' && (updatedItem.internalPositions?.length || updatedItem.internalLayout)) {
-      const resizeResult = recalculatePositionsOnZoneResize(
-        updatedItem,
-        scaleRatio,
-        updatedItem.internalLayout,
-        updatedItem.internalPositions || []
-      );
-      updatedItem = { ...updatedItem, internalPositions: resizeResult.positions };
-      if (resizeResult.hasLossWarning) {
-        setToast(`Atenção: Dimensões reduzidas. ${resizeResult.overflowOccupiedPositions.length} posições com estoque foram preservadas.`);
-      }
-    }
-
-    replaceItem(updatedItem);
   }
 
   // Navegar suavemente até um ponto do mapa (Minimapa e Busca)
@@ -699,6 +662,10 @@ export default function Editor() {
 
   // Adiciona um rótulo de Identificação de Corredor / Rua na posição exata
   const handleAddCorridorAtPoint = useCallback((worldPoint: Point, defaultText?: string) => {
+    if (!isAdmin) {
+      setToast('Modo Visitante: criação de corredores restrita a administradores.');
+      return;
+    }
     const existing = activeArea.elements.filter((el) => el.type === 'corridor');
     const count = existing.length + 1;
     const labelText = defaultText || `CORREDOR ${String(count).padStart(2, '0')}`;
@@ -730,13 +697,7 @@ export default function Editor() {
     setDesktopSidebarOpen(true);
     setMobileDrawerOpen(true);
     setToast(`Corredor "${labelText}" criado na mira.`);
-  }, [activeArea.elements, patchActive, setSelectedId, worldHeight, worldWidth]);
-
-  const handleAddCorridorLabel = (defaultText?: string) => {
-    const cx = Math.round((canvasSize.width / 2 - camera.x) / camera.scale);
-    const cy = Math.round((canvasSize.height / 2 - camera.y) / camera.scale);
-    handleAddCorridorAtPoint({ x: cx, y: cy }, defaultText);
-  };
+  }, [activeArea.elements, isAdmin, patchActive, setSelectedId, worldHeight, worldWidth]);
 
   // MANIPULAÇÃO DE TOQUE E PONTEIROS
   function pointerDown(event: PointerEvent<SVGSVGElement>) {
@@ -811,8 +772,8 @@ export default function Editor() {
       return;
     }
 
-    // 3. Rotação tátil por alça (apenas no modo mover)
-    if (rotateHandle && selected && !selected.locked && tool === 'move') {
+    // 3. Rotação tátil por alça (apenas Admin no modo mover)
+    if (isAdmin && rotateHandle && selected && !selected.locked && tool === 'move') {
       const center = { x: selected.x + selected.width / 2, y: selected.y + selected.height / 2 };
       const initialAngle = Math.atan2(world.y - center.y, world.x - center.x) * (180 / Math.PI);
       gestureRef.current = {
@@ -826,14 +787,14 @@ export default function Editor() {
       return;
     }
 
-    // 4. Redimensionamento por alça (apenas no modo mover)
-    if (handle && selected && !selected.locked && tool === 'move') {
+    // 4. Redimensionamento por alça (apenas Admin no modo mover)
+    if (isAdmin && handle && selected && !selected.locked && tool === 'move') {
       gestureRef.current = { kind: 'resize', pointerId: event.pointerId, startWorld: world, item: clone(selected), corner: handle };
       return;
     }
 
-    // 5. Desenho de retângulos ou paredes
-    if (tool === 'rectangle' || tool === 'divider') {
+    // 5. Desenho de retângulos ou paredes (apenas Admin)
+    if (isAdmin && (tool === 'rectangle' || tool === 'divider')) {
       const snapped = snapPointToElements(world, activeArea.elements, cameraRef.current.scale);
       gestureRef.current = { kind: 'draw', pointerId: event.pointerId, startWorld: snapped.point, endWorld: snapped.point, type: tool };
       setAlignmentGuides(snapped.guides);
@@ -841,8 +802,8 @@ export default function Editor() {
       return;
     }
 
-    // 6. Modo Exclusivo de Corredores (Seleção/Adição/Remoção de Corredores)
-    if (tool === 'corridor') {
+    // 6. Modo Exclusivo de Corredores (apenas Admin)
+    if (isAdmin && tool === 'corridor') {
       if (item && item.type === 'corridor') {
         setSelectedId(item.id);
         setDesktopSidebarOpen(true);
@@ -855,8 +816,8 @@ export default function Editor() {
       return;
     }
 
-    // 7. Modo Exclusivo de Mover (Apenas mover e redimensionar no mapa)
-    if (tool === 'move' && item) {
+    // 7. Modo Exclusivo de Mover (apenas Admin)
+    if (isAdmin && tool === 'move' && item) {
       if (item.locked) {
         setSelectedId(item.id);
         setSelectedPositionId(null);
@@ -1196,7 +1157,11 @@ export default function Editor() {
           }
           setDesktopSidebarOpen(true);
           setMobileDrawerOpen(true);
-          setToast(`Posição ${pos.code} selecionada para edição individual.`);
+          setToast(
+            isAdmin
+              ? `Posição ${pos.code} selecionada para edição individual.`
+              : `Posição ${pos.code} selecionada para consulta.`
+          );
         } else {
           // Toque no elemento / zona
           setSelectedId(gesture.item.id);
@@ -1225,7 +1190,11 @@ export default function Editor() {
         }
         setDesktopSidebarOpen(true);
         setMobileDrawerOpen(true);
-        setToast(`Posição ${pos.code} selecionada para edição individual.`);
+        setToast(
+          isAdmin
+            ? `Posição ${pos.code} selecionada para edição individual.`
+            : `Posição ${pos.code} selecionada para consulta.`
+        );
       }
       pendingCellTapRef.current = null;
     }
@@ -1395,31 +1364,8 @@ export default function Editor() {
     }
   }
 
-  // Desfazer & Refazer
-  const undo = () => {
-    if (!historyRef.current.length) return;
-    const previous = historyRef.current[historyRef.current.length - 1];
-    historyRef.current = historyRef.current.slice(0, -1);
-    futureRef.current = [clone(areasRef.current), ...futureRef.current];
-    setHistory(historyRef.current);
-    setFuture(futureRef.current);
-    areasRef.current = previous;
-    setAreas(previous);
-  };
-
-  const redo = () => {
-    if (!futureRef.current.length) return;
-    const next = futureRef.current[0];
-    futureRef.current = futureRef.current.slice(1);
-    historyRef.current = [...historyRef.current, clone(areasRef.current)];
-    setHistory(historyRef.current);
-    setFuture(futureRef.current);
-    areasRef.current = next;
-    setAreas(next);
-  };
-
   const duplicateSelected = () => {
-    if (!selected) return;
+    if (!isAdmin || !selected) return;
     const newZoneId = createId(selected.type);
     const copyPositions = selected.internalPositions?.map((pos, pIdx) => ({
       ...pos,
@@ -1442,6 +1388,7 @@ export default function Editor() {
   // Salva novas dimensões do galpão (WarehouseSizeDialog)
   // As zonas diminuem proporcionalmente mantendo posição e 100% dos produtos internos sem deformar o formato
   const handleSaveWarehouseDimensions = (newWMeters: number, newHMeters: number, scaleElements: boolean = true) => {
+    if (!isAdmin) return;
     const oldBounds = getAreaBounds(activeArea);
     const oldWPx = oldBounds.widthPx;
     const oldHPx = oldBounds.heightPx;
@@ -1547,7 +1494,7 @@ export default function Editor() {
 
   // Atualiza porte do volume / categoria e recalcula posições internas dividindo a área automaticamente
   const handleUpdateZoneVolumeType = (newProductSize: ProductSize, newCategory?: string) => {
-    if (!selected || selected.type !== 'rectangle') return;
+    if (!isAdmin || !selected || selected.type !== 'rectangle') return;
     const updated = applyVolumePresetToZone(selected, newProductSize, scaleRatio);
     if (newCategory) {
       updated.category = newCategory;
@@ -1581,6 +1528,10 @@ export default function Editor() {
 
   // Cria nova área limpa
   const createNewArea = () => {
+    if (!isAdmin) {
+      setToast('Apenas administradores podem criar novos galpões.');
+      return;
+    }
     const newArea: FloorArea = {
       id: createId('wh'),
       name: `Galpão ${areas.length + 1}`,
@@ -1589,9 +1540,10 @@ export default function Editor() {
       heightMeters: DEFAULT_HEIGHT_METERS,
       elements: [],
     };
-    recordAreas([...areas, newArea]);
-    setActiveId(newArea.id);
-    setToast(`Galpão criado.`);
+    if (recordAreas([...areas, newArea])) {
+      setActiveId(newArea.id);
+      setToast(`Galpão criado.`);
+    }
   };
 
   const exportBackup = () => {
@@ -1613,6 +1565,10 @@ export default function Editor() {
 
   const readImport = (file?: File) => {
     if (!file) return;
+    if (!isAdmin) {
+      setToast('Modo Visitante: importação de backup restrita a administradores.');
+      return;
+    }
     const reader = new FileReader();
     reader.onload = (e) => {
       try {
@@ -1627,16 +1583,31 @@ export default function Editor() {
   };
 
   const applyImport = () => {
-    if (!queuedImport) return;
-    recordAreas(queuedImport);
-    if (queuedImport[0]?.id) setActiveId(queuedImport[0].id);
-    setQueuedImport(null);
-    setModal(null);
-    setToast('Backup restaurado com sucesso.');
+    if (!isAdmin || !queuedImport) return;
+    if (recordAreas(queuedImport)) {
+      if (queuedImport[0]?.id) setActiveId(queuedImport[0].id);
+      setQueuedImport(null);
+      setModal(null);
+      setToast('Backup restaurado e enviado para sincronização central.');
+    }
   };
 
   // Ações do Spotlight Command Palette
   const handleSpotlightAction = useCallback((action: SpotlightCommandAction) => {
+    const adminOnlyActions: SpotlightCommandAction[] = [
+      'new_warehouse',
+      'resize_warehouse',
+      'import_backup',
+      'open_calibration',
+      'mode_move',
+      'mode_zone',
+      'mode_corridor',
+    ];
+    if (!isAdmin && adminOnlyActions.includes(action)) {
+      setToast('Ação restrita a administradores.');
+      return;
+    }
+
     switch (action) {
       case 'new_warehouse':
         createNewArea();
@@ -1699,7 +1670,7 @@ export default function Editor() {
         setToast('Fita Métrica: Clique em dois pontos');
         break;
     }
-  }, [fitPlan, toggleTheme]);
+  }, [fitPlan, isAdmin, toggleTheme]);
 
   const handleSpotlightNavigate = useCallback(
     (targetAreaId: string, elementId: string, x: number, y: number, name: string, code?: string) => {
@@ -1739,19 +1710,18 @@ export default function Editor() {
         onSelectArea={(id) => setActiveId(id)}
         onCreateNewArea={createNewArea}
         bounds={bounds}
-        onOpenResizeDialog={() => setModal('warehouse-size')}
+        onOpenResizeDialog={() => isAdmin && setModal('warehouse-size')}
         tool={tool}
         onSelectTool={(t) => {
-          setTool(t);
-          setMeasureLine(null);
+          selectToolSafe(t);
           if (t === 'select') setToast('Modo Seleção Ativado');
         }}
         snapEnabled={snapEnabled}
-        onToggleSnap={() => setSnapEnabled(!snapEnabled)}
+        onToggleSnap={() => isAdmin && setSnapEnabled(!snapEnabled)}
         physicsEnabled={physicsEnabled}
-        onTogglePhysics={() => setPhysicsEnabled(!physicsEnabled)}
+        onTogglePhysics={() => isAdmin && setPhysicsEnabled(!physicsEnabled)}
         multiSelectMode={isMultiSelectMode}
-        onToggleMultiSelect={() => setIsMultiSelectMode(!isMultiSelectMode)}
+        onToggleMultiSelect={() => isAdmin && setIsMultiSelectMode(!isMultiSelectMode)}
         precisionNavMode={precisionNavMode}
         onTogglePrecisionNav={() => {
           setPrecisionNavMode((prev) => {
@@ -1760,29 +1730,39 @@ export default function Editor() {
             return next;
           });
         }}
-        canUndo={history.length > 0}
+        canUndo={isAdmin && history.length > 0}
         onUndo={undo}
-        canRedo={future.length > 0}
+        canRedo={isAdmin && future.length > 0}
         onRedo={redo}
         onOpenSpotlight={() => setModal('spotlight')}
         onOpenLayers={() => setModal('layers')}
         onOpenShortcuts={() => setModal('shortcuts')}
         onOpenPngExport={() => setModal('png-export')}
         onExportBackup={exportBackup}
-        onImportBackup={() => fileInputRef.current?.click()}
+        onImportBackup={() => isAdmin && fileInputRef.current?.click()}
         isDark={isDark}
         onToggleTheme={toggleTheme}
         selectedElementCount={selectedIds.length}
         sidebarOpen={desktopSidebarOpen}
         onToggleSidebar={() => setDesktopSidebarOpen(!desktopSidebarOpen)}
         onOpenMobileMenu={() => setMobileMenuOpen(true)}
+        isAdmin={isAdmin}
+        userEmail={auth.user?.email ?? null}
+        connectionStatus={sharedMap.connectionStatus}
+        syncStatus={sharedMap.syncStatus}
+        mapVersion={sharedMap.mapVersion}
+        onOpenAccessPanel={() => setModal('access-panel')}
+        onOpenLogin={() => setModal('auth')}
       />
       <input
         ref={fileInputRef}
         type="file"
         accept="application/json,.json"
         hidden
-        onChange={(e) => void readImport(e.target.files?.[0])}
+        onChange={(e) => {
+          void readImport(e.target.files?.[0]);
+          e.target.value = '';
+        }}
       />
 
       {/* 2. ÁREA CENTRAL: CANVAS VIEWPORT EM TELA TOTAL (MAXIMIZADO) */}
@@ -2488,8 +2468,8 @@ export default function Editor() {
                           </g>
                         )}
 
-                        {/* MANIPULAÇÃO TÁTIL: ALÇAS DE REDIMENSIONAMENTO E ROTAÇÃO (APENAS NO MODO MOVER SE SELECIONADO E NÃO BLOQUEADO) */}
-                        {tool === 'move' && isSelected && !isLocked && belongsToIsolated && (item.type === 'rectangle' || item.type === 'rack' || item.type === 'corridor') && (
+                        {/* MANIPULAÇÃO TÁTIL: ALÇAS DE REDIMENSIONAMENTO E ROTAÇÃO (APENAS ADMIN NO MODO MOVER SE SELECIONADO E NÃO BLOQUEADO) */}
+                        {isAdmin && tool === 'move' && isSelected && !isLocked && belongsToIsolated && (item.type === 'rectangle' || item.type === 'rack' || item.type === 'corridor') && (
                           <g>
                             {/* 1. HASTE E ALÇA DE ROTAÇÃO TÁTIL DIRETA (Acima do Centro) */}
                             {(() => {
@@ -2837,12 +2817,15 @@ export default function Editor() {
                 </g>
               </svg>
 
-              {/* DOCK FLUTUANTE INFERIOR MODERNO 3.0 (FERRAMENTAS CAD & WMS) */}
+              {/* DOCK FLUTUANTE INFERIOR 4.0 (FERRAMENTAS CAD & WMS) */}
               <FloatingActionDock
                 tool={tool}
                 onSelectTool={(t) => {
-                  setTool(t);
-                  setMeasureLine(null);
+                  if (!isAdmin && (t === 'move' || t === 'rectangle' || t === 'divider' || t === 'corridor')) {
+                    selectToolSafe(t);
+                    return;
+                  }
+                  selectToolSafe(t);
                   if (t === 'select') setToast('Modo Seleção Ativado');
                   else if (t === 'move') setToast('Modo Mover Ativado');
                   else if (t === 'pan') setToast('Modo Navegar no Mapa');
@@ -2852,24 +2835,28 @@ export default function Editor() {
                 }}
                 snapEnabled={snapEnabled}
                 onToggleSnap={() => {
+                  if (!isAdmin) return;
                   setSnapEnabled((prev) => !prev);
                   setToast(!snapEnabled ? 'Magnetismo / Snap Ativado' : 'Movimento Livre sem Snap');
                 }}
                 physicsEnabled={physicsEnabled}
                 onTogglePhysics={() => {
+                  if (!isAdmin) return;
                   setPhysicsEnabled((prev) => !prev);
                   setToast(!physicsEnabled ? 'Física Anti-Sobreposição Ativada' : 'Física Desativada');
                 }}
                 multiSelectMode={isMultiSelectMode}
                 onToggleMultiSelect={() => {
+                  if (!isAdmin) return;
                   setIsMultiSelectMode((prev) => !prev);
                   setToast(!isMultiSelectMode ? 'Modo Seleção Múltipla Ativado' : 'Modo Seleção Individual');
                 }}
-                canUndo={history.length > 0}
+                canUndo={isAdmin && history.length > 0}
                 onUndo={undo}
-                canRedo={future.length > 0}
+                canRedo={isAdmin && future.length > 0}
                 onRedo={redo}
                 isDark={isDark}
+                isAdmin={isAdmin}
                 onOpenSpotlight={() => setModal('spotlight')}
               />
 
@@ -2961,8 +2948,15 @@ export default function Editor() {
                 <ChevronRight className="w-4 h-4" />
               </button>
               <div className="space-y-4">
+                {!isAdmin && (
+                  <ReadOnlyNoticeBanner
+                    isDark={isDark}
+                    onRequestLogin={() => setModal('auth')}
+                  />
+                )}
+
                 {/* Banner de Seleção Múltipla & Operações de Grupo */}
-                {selectedIds.length > 1 && (
+                {isAdmin && selectedIds.length > 1 && (
                   <div className="p-3 rounded-xl bg-blue-950/40 border border-blue-500/40 space-y-2">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-1.5">
@@ -3105,29 +3099,33 @@ export default function Editor() {
                     </span>
                   </div>
                   <div className="flex items-center gap-1.5 shrink-0">
-                    {/* Botão de Modo Movimento Livre (Tela Limpa) */}
-                    <button
-                      type="button"
-                      onClick={() => setFreeMoveMode(true)}
-                      className="px-2 py-1 rounded-md text-xs text-orange-400 bg-orange-500/10 hover:bg-orange-500/20 border border-orange-500/30 flex items-center gap-1 font-semibold transition-colors"
-                      title="Tela limpa com micro-painel para mover e posicionar livremente"
-                    >
-                      <Move className="w-3.5 h-3.5" />
-                      <span className="text-[11px] hidden lg:inline">Mover Livre</span>
-                    </button>
-                    {/* Botão de Trava / Bloqueio */}
-                    <button
-                      type="button"
-                      onClick={toggleLockSelected}
-                      className={`p-1.5 rounded-md text-xs flex items-center gap-1 font-semibold transition-colors ${
-                        selected.locked
-                          ? 'bg-amber-500/20 text-amber-400 border border-amber-500/40'
-                          : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
-                      }`}
-                      title={selected.locked ? 'Desbloquear objeto' : 'Bloquear objeto'}
-                    >
-                      {selected.locked ? <Lock className="w-3.5 h-3.5" /> : <Unlock className="w-3.5 h-3.5" />}
-                    </button>
+                    {isAdmin && (
+                      <>
+                        {/* Botão de Modo Movimento Livre (Tela Limpa) */}
+                        <button
+                          type="button"
+                          onClick={() => setFreeMoveMode(true)}
+                          className="px-2 py-1 rounded-md text-xs text-orange-400 bg-orange-500/10 hover:bg-orange-500/20 border border-orange-500/30 flex items-center gap-1 font-semibold transition-colors"
+                          title="Tela limpa com micro-painel para mover e posicionar livremente"
+                        >
+                          <Move className="w-3.5 h-3.5" />
+                          <span className="text-[11px] hidden lg:inline">Mover Livre</span>
+                        </button>
+                        {/* Botão de Trava / Bloqueio */}
+                        <button
+                          type="button"
+                          onClick={toggleLockSelected}
+                          className={`p-1.5 rounded-md text-xs flex items-center gap-1 font-semibold transition-colors ${
+                            selected.locked
+                              ? 'bg-amber-500/20 text-amber-400 border border-amber-500/40'
+                              : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+                          }`}
+                          title={selected.locked ? 'Desbloquear objeto' : 'Bloquear objeto'}
+                        >
+                          {selected.locked ? <Lock className="w-3.5 h-3.5" /> : <Unlock className="w-3.5 h-3.5" />}
+                        </button>
+                      </>
+                    )}
                     {/* Botão de Recolher Sidebar */}
                     <button
                       type="button"
@@ -3156,13 +3154,15 @@ export default function Editor() {
                       <Lock className="w-3.5 h-3.5 shrink-0" />
                       <span>Objeto travado contra edição</span>
                     </div>
-                    <button
-                      type="button"
-                      onClick={toggleLockSelected}
-                      className="text-[11px] font-bold underline hover:text-amber-200"
-                    >
-                      Desbloquear
-                    </button>
+                    {isAdmin && (
+                      <button
+                        type="button"
+                        onClick={toggleLockSelected}
+                        className="text-[11px] font-bold underline hover:text-amber-200"
+                      >
+                        Desbloquear
+                      </button>
+                    )}
                   </div>
                 )}
 
@@ -3171,12 +3171,12 @@ export default function Editor() {
                   <label className="block text-[11px] text-slate-400 mb-1 font-medium">Nome / Endereço</label>
                   <input
                     type="text"
-                    disabled={selected.locked}
+                    disabled={!isAdmin || selected.locked}
                     value={selected.name}
                     onChange={(e) => replaceItem({ ...selected, name: e.target.value })}
                     onPointerDown={(e) => e.stopPropagation()}
                     onTouchStart={(e) => e.stopPropagation()}
-                    className="w-full px-2.5 py-1.5 text-xs font-semibold rounded-md border border-slate-700 bg-slate-950 text-slate-100 disabled:opacity-50"
+                    className="w-full px-2.5 py-1.5 text-xs font-semibold rounded-md border border-slate-700 bg-slate-950 text-slate-100 disabled:opacity-60"
                   />
                 </div>
 
@@ -3192,13 +3192,13 @@ export default function Editor() {
                     <label className="block text-[10px] text-slate-400 mb-0.5">Código do Produto (SKU / EAN)</label>
                     <input
                       type="text"
-                      disabled={selected.locked}
+                      disabled={!isAdmin || selected.locked}
                       value={selected.skuCode || ''}
                       onChange={(e) => replaceItem({ ...selected, skuCode: e.target.value.toUpperCase() })}
                       onPointerDown={(e) => e.stopPropagation()}
                       onTouchStart={(e) => e.stopPropagation()}
                       placeholder="Ex: PAL-1042, SKU-ELEC-01"
-                      className="w-full px-2.5 py-1.5 text-xs font-mono font-bold rounded-md border border-slate-700 bg-slate-950 text-orange-400 disabled:opacity-50"
+                      className="w-full px-2.5 py-1.5 text-xs font-mono font-bold rounded-md border border-slate-700 bg-slate-950 text-orange-400 disabled:opacity-60"
                     />
                   </div>
 
@@ -3206,10 +3206,10 @@ export default function Editor() {
                   <div>
                     <label className="block text-[10px] text-slate-400 mb-0.5">Porte / Tamanho do Volume</label>
                     <select
-                      disabled={selected.locked}
+                      disabled={!isAdmin || selected.locked}
                       value={selected.productSize || 'pallet'}
                       onChange={(e) => handleUpdateZoneVolumeType(e.target.value as ProductSize, selected.category)}
-                      className="w-full px-2.5 py-1.5 text-xs font-semibold rounded-md border border-slate-700 bg-slate-950 text-slate-200 disabled:opacity-50"
+                      className="w-full px-2.5 py-1.5 text-xs font-semibold rounded-md border border-slate-700 bg-slate-950 text-slate-200 disabled:opacity-60"
                     >
                       {PRODUCT_SIZES.map((size) => (
                         <option key={size.id} value={size.id}>
@@ -3223,10 +3223,10 @@ export default function Editor() {
                   <div>
                     <label className="block text-[10px] text-slate-400 mb-0.5">Categoria / Setor Logístico</label>
                     <select
-                      disabled={selected.locked}
+                      disabled={!isAdmin || selected.locked}
                       value={selected.category || 'general'}
                       onChange={(e) => handleUpdateZoneVolumeType(selected.productSize || 'pallet', e.target.value)}
-                      className="w-full px-2.5 py-1.5 text-xs font-semibold rounded-md border border-slate-700 bg-slate-950 text-slate-200 disabled:opacity-50"
+                      className="w-full px-2.5 py-1.5 text-xs font-semibold rounded-md border border-slate-700 bg-slate-950 text-slate-200 disabled:opacity-60"
                     >
                       {PRODUCT_CATEGORIES.map((cat) => (
                         <option key={cat.id} value={cat.id}>
@@ -3237,7 +3237,8 @@ export default function Editor() {
                   </div>
                 </div>
 
-                {/* CONTROLES TÁTEIS: Rotação Rápida & Ajuste Fino D-Pad */}
+                {/* CONTROLES TÁTEIS: Rotação Rápida & Ajuste Fino D-Pad (APENAS ADMIN) */}
+                {isAdmin && (
                 <div className="p-3 rounded-xl border border-slate-800 bg-slate-950/60 space-y-2.5">
                   <div className="flex items-center justify-between text-xs font-bold text-slate-300">
                     <span className="flex items-center gap-1.5">
@@ -3310,17 +3311,24 @@ export default function Editor() {
                     </div>
                   </div>
                 </div>
+                )}
 
                 {/* Ações Específicas do Espaço Selecionado */}
                 {selected.type === 'rack' ? (
-                  <button
-                    type="button"
-                    onClick={() => setModal('rack-gen')}
-                    className="w-full py-2 px-3 rounded-xl bg-orange-600/15 hover:bg-orange-600/25 border border-orange-500/40 text-orange-300 text-xs font-semibold flex items-center justify-center gap-2 transition-colors"
-                  >
-                    <BoxIcon className="w-4 h-4 text-orange-400" />
-                    <span>Configurar Estrutura de Racks</span>
-                  </button>
+                  isAdmin ? (
+                    <button
+                      type="button"
+                      onClick={() => setModal('rack-gen')}
+                      className="w-full py-2 px-3 rounded-xl bg-orange-600/15 hover:bg-orange-600/25 border border-orange-500/40 text-orange-300 text-xs font-semibold flex items-center justify-center gap-2 transition-colors"
+                    >
+                      <BoxIcon className="w-4 h-4 text-orange-400" />
+                      <span>Configurar Estrutura de Racks</span>
+                    </button>
+                  ) : (
+                    <div className="p-3 rounded-xl border border-slate-800 bg-slate-950/60 text-xs text-slate-400">
+                      Estrutura Porta-Paletes · Consulta em modo visitante.
+                    </div>
+                  )
                 ) : selected.type === 'rectangle' ? (
                   <div className="space-y-3">
                     {/* Botão de Modo Foco Individual */}
@@ -3343,7 +3351,13 @@ export default function Editor() {
                       }`}
                     >
                       <Target className="w-4 h-4" />
-                      <span>{isolatedSpaceId === selected.id ? 'Sair do Modo Foco' : 'Editar Espaço Individual (Modo Foco)'}</span>
+                      <span>
+                        {isolatedSpaceId === selected.id
+                          ? 'Sair do Modo Foco'
+                          : isAdmin
+                          ? 'Editar Espaço Individual (Modo Foco)'
+                          : 'Visualizar Espaço em Foco'}
+                      </span>
                     </button>
 
                     {/* GERENCIADOR DE MÓDULOS E POSIÇÕES INTERNAS DA ZONA */}
@@ -3354,6 +3368,7 @@ export default function Editor() {
                       selectedPositionId={selectedPositionId}
                       onSelectPosition={setSelectedPositionId}
                       isDark={isDark}
+                      readOnly={!isAdmin}
                     />
 
                     {selected.groupId && (
@@ -3368,6 +3383,7 @@ export default function Editor() {
                     )}
                   </div>
                 ) : selected.type === 'corridor' ? (
+                  isAdmin ? (
                   <div className="space-y-3.5 p-3.5 rounded-xl bg-slate-900/95 border border-sky-500/50 shadow-xl">
                     <div className="flex items-center justify-between pb-2 border-b border-slate-800">
                       <span className="text-xs font-bold text-sky-400 flex items-center gap-1.5">
@@ -3608,9 +3624,15 @@ export default function Editor() {
                       </div>
                     </div>
                   </div>
+                  ) : (
+                    <div className="p-3 rounded-xl bg-slate-950/70 border border-sky-500/30 text-xs text-sky-300 font-mono">
+                      Corredor / Rua: {selected.corridorText || selected.name}
+                    </div>
+                  )
                 ) : null}
 
-                {/* Cores Setoriais */}
+                {/* Cores Setoriais (APENAS ADMIN) */}
+                {isAdmin && (
                 <div>
                   <label className="block text-[11px] text-slate-400 mb-1.5 font-medium">Cor Setorial</label>
                   <div className="grid grid-cols-4 gap-1.5">
@@ -3631,9 +3653,11 @@ export default function Editor() {
                     ))}
                   </div>
                 </div>
+                )}
               </div>
 
-              {/* Duplicar & Excluir */}
+              {/* Duplicar & Excluir (APENAS ADMIN) */}
+              {isAdmin && (
               <div className="pt-3 border-t border-slate-800 mt-4 flex gap-2">
                 <button
                   type="button"
@@ -3653,6 +3677,7 @@ export default function Editor() {
                   <Trash2 className="w-4 h-4" />
                 </button>
               </div>
+              )}
             </aside>
 
             {/* MOBILE BOTTOM SHEET DRAWER (<MD) */}
@@ -3684,32 +3709,36 @@ export default function Editor() {
                   )}
                 </div>
                 <div className="flex items-center gap-1.5 shrink-0">
-                  {/* Botão Mover Livre no Mobile */}
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setFreeMoveMode(true);
-                      setToast('Modo Movimentação Livre Ativado: Tela limpa para posicionar o item.');
-                    }}
-                    className="px-2 py-1 rounded-md text-[11px] font-bold text-orange-400 bg-orange-600/20 border border-orange-500/40 flex items-center gap-1"
-                    title="Minimizar para tela limpa com micro-painel flutuante"
-                  >
-                    <Move className="w-3 h-3" />
-                    <span>Mover Livre</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      toggleLockSelected();
-                    }}
-                    className={`p-1.5 rounded-md text-xs font-bold ${
-                      selected.locked ? 'text-amber-400 bg-amber-500/20' : 'text-slate-400 bg-slate-800'
-                    }`}
-                  >
-                    {selected.locked ? <Lock className="w-3.5 h-3.5" /> : <Unlock className="w-3.5 h-3.5" />}
-                  </button>
+                  {isAdmin && (
+                    <>
+                      {/* Botão Mover Livre no Mobile */}
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setFreeMoveMode(true);
+                          setToast('Modo Movimentação Livre Ativado: Tela limpa para posicionar o item.');
+                        }}
+                        className="px-2 py-1 rounded-md text-[11px] font-bold text-orange-400 bg-orange-600/20 border border-orange-500/40 flex items-center gap-1"
+                        title="Minimizar para tela limpa com micro-painel flutuante"
+                      >
+                        <Move className="w-3 h-3" />
+                        <span>Mover Livre</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          toggleLockSelected();
+                        }}
+                        className={`p-1.5 rounded-md text-xs font-bold ${
+                          selected.locked ? 'text-amber-400 bg-amber-500/20' : 'text-slate-400 bg-slate-800'
+                        }`}
+                      >
+                        {selected.locked ? <Lock className="w-3.5 h-3.5" /> : <Unlock className="w-3.5 h-3.5" />}
+                      </button>
+                    </>
+                  )}
                   <button
                     type="button"
                     onClick={(e) => {
@@ -3725,7 +3754,15 @@ export default function Editor() {
 
               {/* Conteúdo da Gaveta Mobile */}
               <div className="p-3 max-h-[70vh] sm:max-h-[50vh] overflow-y-auto overscroll-contain space-y-3">
+                {!isAdmin && (
+                  <ReadOnlyNoticeBanner
+                    isDark={isDark}
+                    onRequestLogin={() => setModal('auth')}
+                  />
+                )}
+
                 {/* Atalho Rápido para Liberar Visão do Mapa */}
+                {isAdmin && (
                 <div className="flex items-center justify-between p-2 rounded-xl bg-orange-600/15 border border-orange-500/30 text-xs">
                   <div className="flex items-center gap-1.5 text-orange-300 font-bold">
                     <Move className="w-3.5 h-3.5 text-orange-400" />
@@ -3742,16 +3779,17 @@ export default function Editor() {
                     Ativar
                   </button>
                 </div>
+                )}
                 {/* Nome */}
                 <div>
                   <input
                     type="text"
-                    disabled={selected.locked}
+                    disabled={!isAdmin || selected.locked}
                     value={selected.name}
                     onChange={(e) => replaceItem({ ...selected, name: e.target.value })}
                     onPointerDown={(e) => e.stopPropagation()}
                     onTouchStart={(e) => e.stopPropagation()}
-                    className="w-full px-2.5 py-1.5 text-xs font-semibold rounded-md border border-slate-700 bg-slate-950 text-slate-100 disabled:opacity-50"
+                    className="w-full px-2.5 py-1.5 text-xs font-semibold rounded-md border border-slate-700 bg-slate-950 text-slate-100 disabled:opacity-60"
                     placeholder="Nome do elemento"
                   />
                 </div>
@@ -3762,24 +3800,24 @@ export default function Editor() {
                     <label className="block text-[10px] text-slate-400 mb-0.5">Código SKU</label>
                     <input
                       type="text"
-                      disabled={selected.locked}
+                      disabled={!isAdmin || selected.locked}
                       value={selected.skuCode || ''}
                       onChange={(e) => replaceItem({ ...selected, skuCode: e.target.value.toUpperCase() })}
                       onPointerDown={(e) => e.stopPropagation()}
                       onTouchStart={(e) => e.stopPropagation()}
                       placeholder="Ex: SKU-101"
-                      className="w-full px-2 py-1 text-xs font-mono font-bold rounded-md border border-slate-700 bg-slate-950 text-orange-400 disabled:opacity-50"
+                      className="w-full px-2 py-1 text-xs font-mono font-bold rounded-md border border-slate-700 bg-slate-950 text-orange-400 disabled:opacity-60"
                     />
                   </div>
                   <div>
                     <label className="block text-[10px] text-slate-400 mb-0.5">Porte do Volume</label>
                     <select
-                      disabled={selected.locked}
+                      disabled={!isAdmin || selected.locked}
                       value={selected.productSize || 'medium_box'}
                       onChange={(e) => replaceItem({ ...selected, productSize: e.target.value as ProductSize })}
                       onPointerDown={(e) => e.stopPropagation()}
                       onTouchStart={(e) => e.stopPropagation()}
-                      className="w-full px-2 py-1 text-xs font-semibold rounded-md border border-slate-700 bg-slate-950 text-slate-200 disabled:opacity-50"
+                      className="w-full px-2 py-1 text-xs font-semibold rounded-md border border-slate-700 bg-slate-950 text-slate-200 disabled:opacity-60"
                     >
                       {PRODUCT_SIZES.map((size) => (
                         <option key={size.id} value={size.id}>
@@ -3790,7 +3828,8 @@ export default function Editor() {
                   </div>
                 </div>
 
-                {/* ROTAÇÃO TÁTIL E D-PAD MOBILE */}
+                {/* ROTAÇÃO TÁTIL E D-PAD MOBILE (APENAS ADMIN) */}
+                {isAdmin && (
                 <div className="p-2.5 rounded-xl border border-slate-800 bg-slate-950 space-y-2">
                   <div className="flex items-center justify-between text-xs font-bold text-slate-300">
                     <span>Girar Objeto:</span>
@@ -3853,17 +3892,20 @@ export default function Editor() {
                     </div>
                   </div>
                 </div>
+                )}
 
                 {/* Ações Especiais Mobile */}
                 {selected.type === 'rack' ? (
-                  <button
-                    type="button"
-                    onClick={() => setModal('rack-gen')}
-                    className="w-full py-2 px-3 rounded-xl bg-orange-600/15 border border-orange-500/40 text-orange-300 text-xs font-semibold flex items-center justify-center gap-2"
-                  >
-                    <BoxIcon className="w-4 h-4 text-orange-400" />
-                    <span>Configurar Estrutura de Racks</span>
-                  </button>
+                  isAdmin ? (
+                    <button
+                      type="button"
+                      onClick={() => setModal('rack-gen')}
+                      className="w-full py-2 px-3 rounded-xl bg-orange-600/15 border border-orange-500/40 text-orange-300 text-xs font-semibold flex items-center justify-center gap-2"
+                    >
+                      <BoxIcon className="w-4 h-4 text-orange-400" />
+                      <span>Configurar Estrutura de Racks</span>
+                    </button>
+                  ) : null
                 ) : selected.type === 'rectangle' ? (
                   <div className="space-y-2.5">
                     <button
@@ -3885,7 +3927,13 @@ export default function Editor() {
                       }`}
                     >
                       <Target className="w-4 h-4" />
-                      <span>{isolatedSpaceId === selected.id ? 'Sair do Modo Foco' : 'Editar Espaço Individual (Modo Foco)'}</span>
+                      <span>
+                        {isolatedSpaceId === selected.id
+                          ? 'Sair do Modo Foco'
+                          : isAdmin
+                          ? 'Editar Espaço Individual (Modo Foco)'
+                          : 'Visualizar Espaço em Foco'}
+                      </span>
                     </button>
 
                     {/* GERENCIADOR DE MÓDULOS E POSIÇÕES INTERNAS DA ZONA NO MOBILE */}
@@ -3896,6 +3944,7 @@ export default function Editor() {
                       selectedPositionId={selectedPositionId}
                       onSelectPosition={setSelectedPositionId}
                       isDark={isDark}
+                      readOnly={!isAdmin}
                     />
 
                     {selected.groupId && (
@@ -3910,6 +3959,7 @@ export default function Editor() {
                     )}
                   </div>
                 ) : selected.type === 'corridor' ? (
+                  isAdmin ? (
                   <div className="space-y-3 p-3 rounded-xl bg-slate-950 border border-sky-500/40">
                     <div className="flex items-center justify-between">
                       <span className="text-xs font-bold text-sky-400 flex items-center gap-1">
@@ -4029,9 +4079,15 @@ export default function Editor() {
                       </div>
                     </div>
                   </div>
+                  ) : (
+                    <div className="p-3 rounded-xl bg-slate-950 border border-sky-500/30 text-xs text-sky-300 font-mono">
+                      Corredor / Rua: {selected.corridorText || selected.name}
+                    </div>
+                  )
                 ) : null}
 
-                {/* Cores Setoriais no Mobile */}
+                {/* Cores Setoriais no Mobile (APENAS ADMIN) */}
+                {isAdmin && (
                 <div className="flex items-center gap-2 overflow-x-auto pb-1">
                   {WMS_COLOR_PALETTE.map((c) => (
                     <button
@@ -4046,8 +4102,10 @@ export default function Editor() {
                     />
                   ))}
                 </div>
+                )}
 
-                {/* Duplicar & Excluir Mobile */}
+                {/* Duplicar & Excluir Mobile (APENAS ADMIN) */}
+                {isAdmin && (
                 <div className="flex items-center gap-2 pt-1 border-t border-slate-800">
                   <button
                     type="button"
@@ -4067,6 +4125,7 @@ export default function Editor() {
                     <span>Excluir</span>
                   </button>
                 </div>
+                )}
               </div>
             </div>
 
@@ -4092,7 +4151,9 @@ export default function Editor() {
                   <span className="text-slate-300 font-sans text-[10px]">{Math.round(selected.width / scaleRatio)}×{Math.round(selected.height / scaleRatio)}m</span>
                 </div>
 
-                {/* D-Pad de Micro-Ajuste Compacto */}
+                {/* D-Pad de Micro-Ajuste Compacto (APENAS ADMIN) */}
+                {isAdmin && (
+                <>
                 <div className="flex items-center gap-0.5 bg-slate-950/70 p-0.5 rounded-lg border border-slate-800">
                   <button
                     type="button"
@@ -4149,6 +4210,8 @@ export default function Editor() {
                   <Magnet className="w-3.5 h-3.5" />
                   <span className="hidden sm:inline">{snapEnabled ? 'Snap' : 'Livre'}</span>
                 </button>
+                </>
+                )}
 
                 {/* Retornar ao Painel de Propriedades */}
                 <button
@@ -4183,28 +4246,32 @@ export default function Editor() {
       </div>
 
       {/* SELETOR RÁPIDO DE FERRAMENTA DE DESENHO NO MOBILE */}
-      {(tool === 'rectangle' || tool === 'divider' || tool === 'measure') && (
+      {((isAdmin && (tool === 'rectangle' || tool === 'divider')) || tool === 'measure') && (
         <div className="md:hidden fixed bottom-14 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1 p-1 rounded-xl bg-slate-900/95 border border-slate-700 shadow-xl backdrop-blur-md">
-          <button
-            type="button"
-            onClick={() => { setTool('rectangle'); setMeasureLine(null); }}
-            className={`px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center gap-1 transition-colors ${
-              tool === 'rectangle' ? 'bg-orange-600 text-white' : 'text-slate-300 hover:bg-slate-800'
-            }`}
-          >
-            <RectangleHorizontal className="w-3.5 h-3.5" />
-            <span>Área</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => { setTool('divider'); setMeasureLine(null); }}
-            className={`px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center gap-1 transition-colors ${
-              tool === 'divider' ? 'bg-orange-600 text-white' : 'text-slate-300 hover:bg-slate-800'
-            }`}
-          >
-            <Minus className="w-3.5 h-3.5" />
-            <span>Parede</span>
-          </button>
+          {isAdmin && (
+            <>
+              <button
+                type="button"
+                onClick={() => { selectToolSafe('rectangle'); }}
+                className={`px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center gap-1 transition-colors ${
+                  tool === 'rectangle' ? 'bg-orange-600 text-white' : 'text-slate-300 hover:bg-slate-800'
+                }`}
+              >
+                <RectangleHorizontal className="w-3.5 h-3.5" />
+                <span>Área</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => { selectToolSafe('divider'); }}
+                className={`px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center gap-1 transition-colors ${
+                  tool === 'divider' ? 'bg-orange-600 text-white' : 'text-slate-300 hover:bg-slate-800'
+                }`}
+              >
+                <Minus className="w-3.5 h-3.5" />
+                <span>Parede</span>
+              </button>
+            </>
+          )}
           <button
             type="button"
             onClick={() => setTool('measure')}
@@ -4245,8 +4312,31 @@ export default function Editor() {
         </div>
         <div className="flex items-center gap-4">
           <span className="text-slate-500 text-[10px]">
-            V: Selecionar · L: Travar Objeto · R: Zonas · P: Porta-Paletes · M: Medir · Ctrl+K: Buscar
+            {isAdmin
+              ? 'V: Selecionar · L: Travar Objeto · R: Zonas · P: Porta-Paletes · M: Medir · Ctrl+K: Buscar'
+              : 'V: Selecionar · H: Mover Mapa · M: Medir · Ctrl+K: Buscar'}
           </span>
+          <button
+            type="button"
+            onClick={() => setModal('access-panel')}
+            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded border text-[10px] font-semibold transition-colors cursor-pointer ${
+              isAdmin
+                ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20'
+                : 'border-sky-500/40 bg-sky-500/10 text-sky-400 hover:bg-sky-500/20'
+            }`}
+            title="Abrir Central de Acesso & Sincronização"
+          >
+            {isAdmin ? <ShieldCheck className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+            <span>{isAdmin ? 'Admin' : 'Visitante'}</span>
+            {sharedMap.connectionStatus === 'connected' ? (
+              <Cloud className="w-3 h-3 text-emerald-400" />
+            ) : (
+              <CloudOff className="w-3 h-3 text-amber-400" />
+            )}
+            {sharedMap.mapVersion && sharedMap.mapVersion > 0 && (
+              <span className="opacity-80">v{sharedMap.mapVersion}</span>
+            )}
+          </button>
           <span className="font-semibold text-orange-400 tabular-nums">{Math.round(camera.scale * 100)}%</span>
         </div>
       </footer>
@@ -4278,6 +4368,79 @@ export default function Editor() {
             </div>
 
             <div className="py-2.5 space-y-3 text-xs">
+              {/* Seção 0: Acesso & Sincronização */}
+              <div className="p-2.5 rounded-xl bg-slate-950/80 border border-slate-800 space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 min-w-0">
+                    {isAdmin ? (
+                      <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
+                    ) : (
+                      <Shield className="w-4 h-4 text-sky-400 shrink-0" />
+                    )}
+                    <div className="min-w-0">
+                      <div className="font-bold text-slate-100 truncate">
+                        {isAdmin ? 'Administrador' : 'Visitante (Somente Leitura)'}
+                      </div>
+                      {auth.user?.email && (
+                        <div className="text-[10px] font-mono text-slate-400 truncate">
+                          {auth.user.email}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  <span
+                    className={`px-2 py-0.5 rounded-md text-[10px] font-mono font-bold border shrink-0 ${
+                      sharedMap.connectionStatus === 'connected'
+                        ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/40'
+                        : 'bg-amber-500/15 text-amber-400 border-amber-500/40'
+                    }`}
+                  >
+                    {sharedMap.connectionStatus === 'connected'
+                      ? `Nuvem v${sharedMap.mapVersion ?? 1}`
+                      : 'Local'}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-2 gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMobileMenuOpen(false);
+                      setModal('access-panel');
+                    }}
+                    className="py-1.5 px-2.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold flex items-center justify-center gap-1.5"
+                  >
+                    <Cloud className="w-3.5 h-3.5 text-sky-400" />
+                    <span>Sincronização</span>
+                  </button>
+
+                  {isAdmin ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMobileMenuOpen(false);
+                        void auth.logout();
+                      }}
+                      className="py-1.5 px-2.5 rounded-lg bg-rose-500/15 text-rose-300 border border-rose-500/30 font-semibold flex items-center justify-center gap-1.5"
+                    >
+                      <span>Sair Admin</span>
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMobileMenuOpen(false);
+                        setModal('auth');
+                      }}
+                      className="py-1.5 px-2.5 rounded-lg bg-orange-600 hover:bg-orange-500 text-white font-bold flex items-center justify-center gap-1.5"
+                    >
+                      <LogIn className="w-3.5 h-3.5" />
+                      <span>Entrar Admin</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+
               {/* Seção 1: Busca */}
               <div className="space-y-1.5">
                 <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Busca WMS</span>
@@ -4314,33 +4477,37 @@ export default function Editor() {
                     </div>
                   </button>
 
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setMobileMenuOpen(false);
-                      setModal('warehouse-size');
-                    }}
-                    className="w-full flex items-center justify-between p-2.5 rounded-xl bg-slate-800/70 hover:bg-slate-800 text-slate-200 font-semibold"
-                  >
-                    <div className="flex items-center gap-2.5">
-                      <Maximize2 className="w-4 h-4 text-orange-400 shrink-0" />
-                      <span>Tamanho do Galpão ({bounds.widthMeters}m × {bounds.heightMeters}m)</span>
-                    </div>
-                  </button>
+                  {isAdmin && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setMobileMenuOpen(false);
+                          setModal('warehouse-size');
+                        }}
+                        className="w-full flex items-center justify-between p-2.5 rounded-xl bg-slate-800/70 hover:bg-slate-800 text-slate-200 font-semibold"
+                      >
+                        <div className="flex items-center gap-2.5">
+                          <Maximize2 className="w-4 h-4 text-orange-400 shrink-0" />
+                          <span>Tamanho do Galpão ({bounds.widthMeters}m × {bounds.heightMeters}m)</span>
+                        </div>
+                      </button>
 
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setMobileMenuOpen(false);
-                      setModal('scale');
-                    }}
-                    className="w-full flex items-center justify-between p-2.5 rounded-xl bg-slate-800/70 hover:bg-slate-800 text-slate-200 font-semibold"
-                  >
-                    <div className="flex items-center gap-2.5">
-                      <Ruler className="w-4 h-4 text-orange-400 shrink-0" />
-                      <span>Calibrar Escala CAD (1m = {scaleRatio}px)</span>
-                    </div>
-                  </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setMobileMenuOpen(false);
+                          setModal('scale');
+                        }}
+                        className="w-full flex items-center justify-between p-2.5 rounded-xl bg-slate-800/70 hover:bg-slate-800 text-slate-200 font-semibold"
+                      >
+                        <div className="flex items-center gap-2.5">
+                          <Ruler className="w-4 h-4 text-orange-400 shrink-0" />
+                          <span>Calibrar Escala CAD (1m = {scaleRatio}px)</span>
+                        </div>
+                      </button>
+                    </>
+                  )}
                 </div>
               </div>
 
@@ -4348,50 +4515,58 @@ export default function Editor() {
               <div className="space-y-1.5 pt-1 border-t border-slate-800">
                 <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Galpões & Backup</span>
                 <div className="grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setMobileMenuOpen(false);
-                      setModal('rename');
-                    }}
-                    className="p-2 rounded-lg bg-slate-800 text-slate-300 font-medium flex items-center justify-center gap-1.5"
-                  >
-                    <Pencil className="w-3.5 h-3.5 text-slate-400" />
-                    <span>Renomear</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setMobileMenuOpen(false);
-                      createNewArea();
-                    }}
-                    className="p-2 rounded-lg bg-slate-800 text-slate-300 font-medium flex items-center justify-center gap-1.5"
-                  >
-                    <Plus className="w-3.5 h-3.5 text-emerald-400" />
-                    <span>Novo Galpão</span>
-                  </button>
+                  {isAdmin && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setMobileMenuOpen(false);
+                          setModal('rename');
+                        }}
+                        className="p-2 rounded-lg bg-slate-800 text-slate-300 font-medium flex items-center justify-center gap-1.5"
+                      >
+                        <Pencil className="w-3.5 h-3.5 text-slate-400" />
+                        <span>Renomear</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setMobileMenuOpen(false);
+                          createNewArea();
+                        }}
+                        className="p-2 rounded-lg bg-slate-800 text-slate-300 font-medium flex items-center justify-center gap-1.5"
+                      >
+                        <Plus className="w-3.5 h-3.5 text-emerald-400" />
+                        <span>Novo Galpão</span>
+                      </button>
+                    </>
+                  )}
                   <button
                     type="button"
                     onClick={() => {
                       setMobileMenuOpen(false);
                       exportBackup();
                     }}
-                    className="p-2 rounded-lg bg-slate-800 text-slate-300 font-medium flex items-center justify-center gap-1.5"
+                    className={`p-2 rounded-lg bg-slate-800 text-slate-300 font-medium flex items-center justify-center gap-1.5 ${
+                      !isAdmin ? 'col-span-2' : ''
+                    }`}
                   >
                     <ArrowDownToLine className="w-3.5 h-3.5" />
                     <span>Exportar JSON</span>
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setMobileMenuOpen(false);
-                      fileInputRef.current?.click();
-                    }}
-                    className="p-2 rounded-lg bg-slate-800 text-slate-300 font-medium flex items-center justify-center gap-1.5"
-                  >
-                    <ArrowUpFromLine className="w-3.5 h-3.5" />
-                    <span>Importar JSON</span>
-                  </button>
+                  {isAdmin && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMobileMenuOpen(false);
+                        fileInputRef.current?.click();
+                      }}
+                      className="p-2 rounded-lg bg-slate-800 text-slate-300 font-medium flex items-center justify-center gap-1.5"
+                    >
+                      <ArrowUpFromLine className="w-3.5 h-3.5" />
+                      <span>Importar JSON</span>
+                    </button>
+                  )}
                 </div>
 
                 <button
@@ -4425,9 +4600,9 @@ export default function Editor() {
         isDark={isDark}
       />
 
-      {/* MODAL: REDIMENSIONAR TAMANHO DO ESPAÇO */}
+      {/* MODAL: REDIMENSIONAR TAMANHO DO ESPAÇO (APENAS ADMIN) */}
       <WarehouseSizeDialog
-        isOpen={modal === 'warehouse-size'}
+        isOpen={isAdmin && modal === 'warehouse-size'}
         onClose={() => setModal(null)}
         currentWidthMeters={bounds.widthMeters}
         currentHeightMeters={bounds.heightMeters}
@@ -4449,9 +4624,11 @@ export default function Editor() {
           }
         }}
         onUpdateElements={(updated) => {
+          if (!isAdmin) return;
           patchActive((area) => ({ ...area, elements: updated }));
         }}
         isDark={isDark}
+        readOnly={!isAdmin}
       />
 
       {/* MODAL: BUSCA GLOBAL WMS & LOCALIZADOR */}
@@ -4464,38 +4641,40 @@ export default function Editor() {
         isDark={isDark}
       />
 
-      {/* MODAL: SPOTLIGHT COMMAND PALETTE 3.0 (CTRL+K) */}
+      {/* MODAL: SPOTLIGHT COMMAND PALETTE 4.0 (CTRL+K) */}
       <SpotlightPalette
         isOpen={modal === 'spotlight'}
         onClose={() => setModal(null)}
         areas={areas}
         activeAreaId={activeId}
         isDark={isDark}
+        isAdmin={isAdmin}
         onNavigateToPosition={handleSpotlightNavigate}
         onExecuteAction={handleSpotlightAction}
       />
 
-      {/* MODAL: ATALHOS DE TECLADO 3.0 */}
+      {/* MODAL: ATALHOS DE TECLADO 4.0 */}
       <KeyboardShortcutsDialog
         isOpen={modal === 'shortcuts'}
         onClose={() => setModal(null)}
         isDark={isDark}
       />
 
-      {/* MODAL: CALIBRAÇÃO DE ESCALA MÉTRICA */}
+      {/* MODAL: CALIBRAÇÃO DE ESCALA MÉTRICA (APENAS ADMIN) */}
       <ScaleCalibrationDialog
-        isOpen={modal === 'scale'}
+        isOpen={isAdmin && modal === 'scale'}
         onClose={() => setModal(null)}
         currentScaleRatio={scaleRatio}
         onSaveScaleRatio={(newRatio) => {
+          if (!isAdmin) return;
           patchActive((area) => ({ ...area, scaleRatio: newRatio }));
           setToast(`Escala calibrada: 1m = ${newRatio}px.`);
         }}
         isDark={isDark}
       />
 
-      {/* MODAL: EXCLUSÃO DE ELEMENTO */}
-      {modal === 'delete' && (
+      {/* MODAL: EXCLUSÃO DE ELEMENTO (APENAS ADMIN) */}
+      {isAdmin && modal === 'delete' && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/65 backdrop-blur-xs">
           <div className="w-full max-w-sm rounded-xl p-5 bg-slate-900 border border-slate-700 text-slate-100 shadow-2xl">
             <h3 className="text-base font-semibold text-slate-100 mb-2">Excluir elemento?</h3>
@@ -4532,8 +4711,8 @@ export default function Editor() {
         </div>
       )}
 
-      {/* MODAL: RENOMEAR GALPÃO */}
-      {modal === 'rename' && (
+      {/* MODAL: RENOMEAR GALPÃO (APENAS ADMIN) */}
+      {isAdmin && modal === 'rename' && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/65 backdrop-blur-xs">
           <div className="w-full max-w-sm rounded-xl p-5 bg-slate-900 border border-slate-700 text-slate-100 shadow-2xl">
             <h3 className="text-base font-semibold text-slate-100 mb-2">Renomear Galpão</h3>
@@ -4571,8 +4750,8 @@ export default function Editor() {
         </div>
       )}
 
-      {/* MODAL: RESTAURAR BACKUP */}
-      {modal === 'import' && (
+      {/* MODAL: RESTAURAR BACKUP (APENAS ADMIN) */}
+      {isAdmin && modal === 'import' && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/65 backdrop-blur-xs">
           <div className="w-full max-w-sm rounded-xl p-5 bg-slate-900 border border-slate-700 text-slate-100 shadow-2xl">
             <h3 className="text-base font-semibold text-slate-100 mb-2">Restaurar backup?</h3>
@@ -4601,6 +4780,101 @@ export default function Editor() {
           </div>
         </div>
       )}
+
+      {/* MODAL: LOGIN & RECUPERAÇÃO DE SENHA ADMIN */}
+      <AuthDialog
+        isOpen={modal === 'auth'}
+        onClose={() => setModal(null)}
+        isConfigured={auth.isConfigured}
+        configError={auth.configError}
+        isDark={isDark}
+        passwordRecoveryPending={auth.passwordRecoveryPending}
+        onLogin={auth.login}
+        onRequestPasswordReset={auth.requestPasswordReset}
+        onCompletePasswordRecovery={auth.completePasswordRecovery}
+        onClearPasswordRecovery={auth.clearPasswordRecovery}
+      />
+
+      {/* MODAL: CENTRAL DE ACESSO & SINCRONIZAÇÃO EM NUVEM */}
+      <AdminPanelDialog
+        isOpen={modal === 'access-panel'}
+        onClose={() => setModal(null)}
+        isDark={isDark}
+        isConfigured={auth.isConfigured}
+        configError={auth.configError}
+        user={auth.user}
+        role={auth.role}
+        isAdmin={isAdmin}
+        connectionStatus={sharedMap.connectionStatus}
+        syncStatus={sharedMap.syncStatus}
+        syncError={sharedMap.syncError}
+        mapVersion={sharedMap.mapVersion}
+        lastUpdatedAt={sharedMap.lastUpdatedAt}
+        lastUpdatedByEmail={sharedMap.lastUpdatedByEmail}
+        hasUnsavedChanges={sharedMap.hasUnsavedChanges}
+        onOpenLogin={() => setModal('auth')}
+        onLogout={auth.logout}
+        onForceSyncNow={() => sharedMap.flushSaveToCloud()}
+        onReloadFromCloud={() => sharedMap.reloadFromCloud()}
+        onExportBackup={exportBackup}
+      />
+
+      {/* MODAL: MIGRAÇÃO INICIAL DO MAPA LOCAL PARA O SUPABASE */}
+      <MigrationDialog
+        isOpen={sharedMap.shouldShowMigrationPrompt}
+        isDark={isDark}
+        candidate={sharedMap.localMigrationCandidate}
+        busy={sharedMap.migrationBusy}
+        onExportLocalJson={() => {
+          const candidateAreas = sharedMap.localMigrationCandidate?.areas;
+          if (!candidateAreas || candidateAreas.length === 0) {
+            exportBackup();
+            return;
+          }
+          const data = {
+            format: 'movare-localizador-backup',
+            version: 3,
+            exportedAt: new Date().toISOString(),
+            areas: candidateAreas,
+          };
+          const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+          const url = URL.createObjectURL(blob);
+          const link = document.createElement('a');
+          link.href = url;
+          link.download = `movare-backup-pre-migracao-${new Date().toISOString().slice(0, 10)}.json`;
+          link.click();
+          URL.revokeObjectURL(url);
+          setToast('Backup JSON local salvo antes da migração.');
+        }}
+        onConfirmMigrate={() => sharedMap.migrateLocalCandidateToCloud()}
+        onStartClean={() => sharedMap.initializeCleanCentralMap()}
+        onDismiss={() => sharedMap.dismissMigrationPrompt()}
+      />
+
+      {/* MODAL: RESOLUÇÃO DE CONFLITO DE EDIÇÃO SIMULTÂNEA */}
+      <ConflictDialog
+        conflict={sharedMap.conflictState}
+        isDark={isDark}
+        onExportLocalDraft={() => {
+          const draftAreas = sharedMap.conflictState?.localAreas || areasRef.current;
+          const data = {
+            format: 'movare-localizador-backup',
+            version: 3,
+            exportedAt: new Date().toISOString(),
+            areas: draftAreas,
+          };
+          const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+          const url = URL.createObjectURL(blob);
+          const link = document.createElement('a');
+          link.href = url;
+          link.download = `movare-rascunho-conflito-${new Date().toISOString().slice(0, 10)}.json`;
+          link.click();
+          URL.revokeObjectURL(url);
+          setToast('Rascunho local exportado em JSON com segurança.');
+        }}
+        onReloadRemote={() => sharedMap.resolveConflictReloadRemote()}
+        onPublishLocalDraft={() => sharedMap.resolveConflictPublishLocalDraft()}
+      />
 
       {/* TELA DE CARREGAMENTO LENTA COM LOGOTIPO MOVARE */}
       {showSplashScreen && (
