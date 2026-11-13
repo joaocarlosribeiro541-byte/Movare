@@ -15,6 +15,9 @@ describe('MOVARE LOCALIZADOR 4.0 — TESTES DO MOTOR DE EXPORTAÇÃO PNG', () =>
 
     const filenameSvg = formatExportFileName('Centro de Distribuição', 'svg');
     expect(filenameSvg).toMatch(/^movare-planta-centro-de-distribuicao-\d{4}-\d{2}-\d{2}\.svg$/);
+
+    const filenameNoCodes = formatExportFileName('Galpão Principal', 'png', false);
+    expect(filenameNoCodes).toMatch(/^movare-planta-galpao-principal-sem-codigos-\d{4}-\d{2}-\d{2}\.png$/);
   });
 
   it('2. Deve calcular corretamente as dimensões de exportação para planta completa em 1x e 2x HD', () => {

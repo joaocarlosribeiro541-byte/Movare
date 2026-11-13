@@ -278,11 +278,23 @@ describe('MOVARE LOCALIZADOR 2.0 — SUÍTE DE TESTES E INTEGRIDADE', () => {
   });
 
   // 9. Formatação e unicidade de identificadores de posições
-  it('9. formatPositionCode e generateStablePositionId devem produzir identificadores únicos e estáveis', () => {
+  it('9. formatPositionCode e generateStablePositionId devem produzir identificadores únicos e estáveis (com ou sem prefixo)', () => {
     const code1 = formatPositionCode('GEL', 1);
     const code2 = formatPositionCode('GEL', 2);
     expect(code1).toBe('GEL0001');
     expect(code2).toBe('GEL0002');
+
+    // Sem prefixo obrigatório: gera apenas o código numérico
+    const numericOnly = formatPositionCode('', 58);
+    expect(numericOnly).toBe('0058');
+
+    const numericPositions = calculateZoneInternalPositions(
+      { id: 'zone-num', width: 200, height: 100, category: 'pallet' },
+      25,
+      { codePrefix: '' }
+    );
+    expect(numericPositions.length).toBeGreaterThan(0);
+    expect(numericPositions[0].code).toBe('0001');
 
     const id1 = generateStablePositionId('zone-abc', 1);
     const id2 = generateStablePositionId('zone-abc', 2);

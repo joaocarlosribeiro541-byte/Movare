@@ -262,7 +262,7 @@ export function getDefaultLayoutForCategory(category?: string): ZoneInternalLayo
 }
 
 export function formatPositionCode(prefix: string, index: number): string {
-  const cleanPrefix = (prefix || 'P').trim().toUpperCase();
+  const cleanPrefix = (prefix ?? '').trim().toUpperCase();
   return `${cleanPrefix}${String(index).padStart(4, '0')}`;
 }
 
@@ -331,7 +331,7 @@ export function calculateZoneInternalPositions(
     depthMeters: number;
   }[] = [];
 
-  const prefix = layout.codePrefix || 'P';
+  const prefix = layout.codePrefix ?? 'P';
 
   if (layout.method === 'horizontal_rows') {
     // MÉTODO A: FILEIRAS HORIZONTAIS DE LARGURA TOTAL

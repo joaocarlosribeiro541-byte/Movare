@@ -44,6 +44,7 @@ export function PngExportDialog({
   const [includeGrid, setIncludeGrid] = useState(true);
   const [includeTitleBlock, setIncludeTitleBlock] = useState(true);
   const [includeWatermark, setIncludeWatermark] = useState(true);
+  const [includeProductCodes, setIncludeProductCodes] = useState(true);
 
   const [isGenerating, setIsGenerating] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -60,6 +61,7 @@ export function PngExportDialog({
     includeGrid,
     includeTitleBlock,
     includeWatermark,
+    includeProductCodes,
     camera,
     canvasSize,
   };
@@ -81,7 +83,7 @@ export function PngExportDialog({
     } catch (err) {
       console.warn('Erro ao gerar preview da exportação:', err);
     }
-  }, [isOpen, scope, theme, includeLegend, includeGrid, includeTitleBlock, includeWatermark, area, bounds, scaleRatio, camera, canvasSize]);
+  }, [isOpen, scope, theme, includeLegend, includeGrid, includeTitleBlock, includeWatermark, includeProductCodes, area, bounds, scaleRatio, camera, canvasSize]);
 
   useEffect(() => {
     if (isOpen) {
@@ -105,7 +107,7 @@ export function PngExportDialog({
       const canvas = await renderWarehouseToCanvas(area, bounds, scaleRatio, currentOptions);
       canvas.toBlob((blob) => {
         if (!blob) throw new Error('Falha ao processar imagem PNG');
-        const filename = formatExportFileName(area.name, 'png');
+        const filename = formatExportFileName(area.name, 'png', includeProductCodes);
         downloadBlob(blob, filename);
         setIsGenerating(false);
         onClose();
@@ -366,6 +368,25 @@ export function PngExportDialog({
                   <div>
                     <span className="font-semibold block">Marca d'água Movare</span>
                     <span className="text-[10px] text-slate-400">Logotipo sutil no centro</span>
+                  </div>
+                </label>
+
+                <label
+                  className={`flex items-center gap-2.5 p-2 rounded-xl border cursor-pointer transition-colors sm:col-span-2 ${
+                    isDark ? 'border-slate-800 bg-slate-950/30' : 'border-slate-200 bg-slate-50'
+                  }`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={includeProductCodes}
+                    onChange={(e) => setIncludeProductCodes(e.target.checked)}
+                    className="rounded text-orange-500 focus:ring-orange-500 w-4 h-4 cursor-pointer accent-orange-500"
+                  />
+                  <div>
+                    <span className="font-semibold block">Códigos dos Produtos & Posições</span>
+                    <span className="text-[10px] text-slate-400">
+                      Desmarque para exportar a planta limpa sem códigos WMS ou SKUs nas células
+                    </span>
                   </div>
                 </label>
               </div>

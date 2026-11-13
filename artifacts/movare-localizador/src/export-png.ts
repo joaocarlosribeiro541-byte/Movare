@@ -254,7 +254,8 @@ export async function renderWarehouseToCanvas(
   ctx.restore();
 
   // 5. ELEMENTOS DA PLANTA BAIXA (DIVISÓRIAS, CORREDORES, ZONAS, POSIÇÕES)
-  drawWarehouseElements(ctx, area.elements, scaleRatio, isDark);
+  const includeProductCodes = options.includeProductCodes !== false;
+  drawWarehouseElements(ctx, area.elements, scaleRatio, isDark, includeProductCodes);
 
   ctx.restore(); // Restaura transform da planta
 
@@ -357,7 +358,8 @@ function drawWarehouseElements(
   ctx: CanvasRenderingContext2D,
   elements: DrawingElement[],
   scaleRatio: number,
-  isDark: boolean
+  isDark: boolean,
+  includeProductCodes = true
 ) {
   // Ordena para que divisórias e corredores fiquem na camada correta
   const sorted = [...elements].sort((a, b) => {
@@ -417,7 +419,7 @@ function drawWarehouseElements(
 
       // Se tiver posições internas detalhadas (células), renderiza cada célula
       if (item.internalPositions && item.internalPositions.length > 0) {
-        drawInternalCells(ctx, item, item.internalPositions, isDark);
+        drawInternalCells(ctx, item, item.internalPositions, isDark, includeProductCodes);
       } else {
         // Exibição simplificada de zona sem células divididas
         const wM = Math.round((item.width / scaleRatio) * 10) / 10;
@@ -437,6 +439,12 @@ function drawWarehouseElements(
           ctx.fillStyle = isDark ? '#94a3b8' : '#475569';
           ctx.font = '10px monospace';
           ctx.fillText(`${wM}m × ${hM}m (${Math.round(wM * hM)}m²)`, item.x + 8, item.y + 32);
+        }
+
+        if (includeProductCodes && item.skuCode && item.height >= 54) {
+          ctx.fillStyle = '#f97316';
+          ctx.font = 'bold 10px monospace';
+          ctx.fillText(`SKU: ${item.skuCode.slice(0, 18)}`, item.x + 8, item.y + 46);
         }
       }
 
@@ -460,7 +468,8 @@ function drawInternalCells(
   ctx: CanvasRenderingContext2D,
   zone: DrawingElement,
   positions: InternalPosition[],
-  isDark: boolean
+  isDark: boolean,
+  includeProductCodes = true
 ) {
   for (const pos of positions) {
     const cellX = zone.x + (pos.relX ?? 0);
@@ -490,13 +499,24 @@ function drawInternalCells(
     ctx.lineWidth = 1;
     ctx.strokeRect(cellX, cellY, cellW, cellH);
 
-    // Texto de código da célula se couber
-    if (cellW >= 22 && cellH >= 14) {
+    // Texto de código da célula e SKU se habilitado e se couber
+    if (includeProductCodes && cellW >= 22 && cellH >= 14) {
+      const hasSku = Boolean(pos.sku && pos.sku.trim().length > 0);
+      const showSku = hasSku && cellW >= 48 && cellH >= 26;
       ctx.font = 'bold 9px monospace';
       ctx.fillStyle = textColor;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText(pos.code.slice(0, 6), cellX + cellW / 2, cellY + cellH / 2);
+      ctx.fillText(
+        (pos.code || '').slice(0, 8),
+        cellX + cellW / 2,
+        showSku ? cellY + cellH * 0.35 : cellY + cellH / 2
+      );
+      if (showSku && pos.sku) {
+        ctx.font = '8px monospace';
+        ctx.fillStyle = isDark ? '#cbd5e1' : '#334155';
+        ctx.fillText(pos.sku.slice(0, 10), cellX + cellW / 2, cellY + cellH * 0.72);
+      }
     }
   }
 }

@@ -112,7 +112,7 @@ export function ZoneInternalPositionsManager({
       return {
         ...p,
         id: p.id || `pos-${idx + 1}`,
-        code: p.code || `P${String(idx + 1).padStart(4, '0')}`,
+        code: typeof p.code === 'string' ? p.code : String(idx + 1).padStart(4, '0'),
         status: p.status || 'empty',
         relX: Number.isFinite(p.relX) ? p.relX : 0,
         relY: Number.isFinite(p.relY) ? p.relY : 0,
@@ -175,10 +175,25 @@ export function ZoneInternalPositionsManager({
   const [unitDepthDraft, setUnitDepthDraft] = useState<number>(currentLayout.unitDepthMeters ?? profile.unitDepthMeters);
   const [clearanceDraft, setClearanceDraft] = useState<number>(currentLayout.clearanceMeters ?? profile.clearanceMeters);
   const [marginDraft, setMarginDraft] = useState<number>(currentLayout.marginMeters ?? profile.marginMeters);
-  const [prefixDraft, setPrefixDraft] = useState<string>(currentLayout.codePrefix || profile.codePrefix);
+  const [prefixDraft, setPrefixDraft] = useState<string>(currentLayout.codePrefix ?? profile.codePrefix);
   const [sameCodePerRowDraft, setSameCodePerRowDraft] = useState<boolean>(currentLayout.sameCodePerRow ?? profile.sameCodePerRow ?? true);
   const [customColsDraft, setCustomColsDraft] = useState<number>(currentLayout.columns || 4);
   const [customRowsDraft, setCustomRowsDraft] = useState<number>(currentLayout.rows || 3);
+
+  useEffect(() => {
+    const p = getCategoryProfile(element.category);
+    const l = element.internalLayout;
+    setMethodDraft(l?.method ?? p.defaultMethod);
+    setRowDepthDraft(l?.rowDepthMeters ?? p.rowDepthMeters);
+    setUnitWidthDraft(l?.unitWidthMeters ?? p.unitWidthMeters);
+    setUnitDepthDraft(l?.unitDepthMeters ?? p.unitDepthMeters);
+    setClearanceDraft(l?.clearanceMeters ?? p.clearanceMeters);
+    setMarginDraft(l?.marginMeters ?? p.marginMeters);
+    setPrefixDraft(l?.codePrefix ?? p.codePrefix);
+    setSameCodePerRowDraft(l?.sameCodePerRow ?? p.sameCodePerRow ?? true);
+    setCustomColsDraft(l?.columns || 4);
+    setCustomRowsDraft(l?.rows || 3);
+  }, [element.id]);
 
   // Aplicação instantânea de preset de porte com vínculo automático e preservação de estoque
   const handleApplyVolumePreset = (presetId: ProductSize) => {
@@ -191,7 +206,7 @@ export function ZoneInternalPositionsManager({
       setUnitDepthDraft(updatedElement.internalLayout.unitDepthMeters ?? 0.85);
       setClearanceDraft(updatedElement.internalLayout.clearanceMeters ?? 0.05);
       setMarginDraft(updatedElement.internalLayout.marginMeters ?? 0.05);
-      setPrefixDraft(updatedElement.internalLayout.codePrefix || 'GEL');
+      setPrefixDraft(updatedElement.internalLayout.codePrefix ?? 'GEL');
       setSameCodePerRowDraft(updatedElement.internalLayout.sameCodePerRow ?? true);
     }
 
@@ -243,7 +258,7 @@ export function ZoneInternalPositionsManager({
       unitDepthMeters: unitDepthDraft,
       clearanceMeters: clearanceDraft,
       marginMeters: marginDraft,
-      codePrefix: prefixDraft || profile.codePrefix,
+      codePrefix: prefixDraft.trim(),
       sameCodePerRow: sameCodePerRowDraft,
       columns: methodDraft === 'custom' ? customColsDraft : undefined,
       rows: methodDraft === 'custom' ? customRowsDraft : undefined,
@@ -624,13 +639,13 @@ export function ZoneInternalPositionsManager({
             <div className="space-y-2 pt-1 border-t border-slate-800">
               <div>
                 <label className="block text-[10px] text-slate-400 mb-0.5">
-                  Prefixo dos Códigos (ex: GEL, FOG, TV, CS)
+                  Prefixo dos Códigos (opcional — deixe vazio para apenas números)
                 </label>
                 <input
                   type="text"
                   value={prefixDraft}
                   onChange={(e) => setPrefixDraft(e.target.value.toUpperCase())}
-                  placeholder="Ex: GEL (Gera GEL-0001...)"
+                  placeholder="Ex: GEL, P ou deixe vazio (0001...)"
                   className="w-full px-2 py-1 text-xs font-mono font-bold rounded border border-slate-700 bg-slate-950 text-red-400"
                 />
               </div>
@@ -960,7 +975,7 @@ export function ZoneInternalPositionsManager({
                       type="text"
                       value={activePosition.code}
                       onChange={(e) => handleUpdatePosition(activePosition.id, { code: e.target.value.toUpperCase() })}
-                      placeholder="Ex: P0001, GEL-01"
+                      placeholder="Ex: 0058, 102, GEL-01"
                       className="w-full px-2 py-1 text-xs font-mono font-bold rounded bg-slate-950 border border-slate-700 text-red-400 focus:border-red-500 focus:outline-none"
                     />
                   </div>
