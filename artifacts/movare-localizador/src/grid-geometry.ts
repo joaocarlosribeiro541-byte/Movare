@@ -66,11 +66,92 @@ export function createGridDividers(
 }
 
 /**
+ * Distribui uma capacidade total inteira de forma determinística entre N células.
+ * Utiliza o algoritmo do Maior Resto (Largest Remainder Method / Hamilton),
+ * garantindo matematicamente que a soma das capacidades das células seja
+ * RIGOROSAMENTE IGUAL à capacidade total original declarada, sem perda por arredondamento
+ * e sem inflação artificial (ex: 10 unidades em 6 células -> [2, 2, 2, 2, 1, 1], soma = 10).
+ */
+export function distributeCapacityDeterministically(totalCapacity: number, cellCount: number): number[] {
+  if (cellCount <= 0) return [];
+  const safeTotal = Math.max(0, Math.round(Number.isFinite(totalCapacity) ? totalCapacity : 0));
+  if (safeTotal === 0) {
+    return Array(cellCount).fill(1); // Mínimo de 1 unidade por célula quando não declarada
+  }
+
+  const basePerCell = Math.floor(safeTotal / cellCount);
+  const remainder = safeTotal % cellCount;
+
+  // Distribui a base para todas as células e incrementa +1 nas primeiras 'remainder' células
+  const result = new Array(cellCount);
+  for (let i = 0; i < cellCount; i++) {
+    result[i] = i < remainder ? basePerCell + 1 : basePerCell;
+  }
+  return result;
+}
+
+/**
+ * Análise formal de capacidades de uma zona / elemento:
+ * 1. Capacidade total declarada da zona
+ * 2. Capacidade da célula / módulo / vão individual
+ * 3. Capacidade calculada derivada do layout interno (soma das células)
+ * 4. Quantidade física ocupada em estoque
+ */
+export function calculateZoneCapacities(element: DrawingElement): {
+  totalDeclaredCapacity: number;
+  cellCount: number;
+  calculatedCapacity: number;
+  occupiedQuantity: number;
+  occupancyPercentage: number;
+} {
+  const positions = element.internalPositions || [];
+  const cellCount = positions.length;
+
+  let occupiedQuantity = 0;
+  for (const pos of positions) {
+    if (pos.quantity && pos.quantity > 0) {
+      occupiedQuantity += pos.quantity;
+    } else if (pos.status === 'occupied') {
+      occupiedQuantity += 1;
+    }
+  }
+
+  // Se slots de rack existirem
+  if (element.slots) {
+    for (const slot of Object.values(element.slots)) {
+      if (slot.quantity && slot.quantity > 0) {
+        occupiedQuantity += slot.quantity;
+      } else if (slot.status === 'occupied') {
+        occupiedQuantity += 1;
+      }
+    }
+  }
+
+  const totalDeclaredCapacity = typeof element.capacity === 'number' && Number.isFinite(element.capacity)
+    ? Math.max(0, element.capacity)
+    : cellCount > 0 ? cellCount : 10;
+
+  const calculatedCapacity = cellCount > 0 ? cellCount : totalDeclaredCapacity;
+  const occupancyPercentage = calculatedCapacity > 0
+    ? Math.min(100, Math.round((occupiedQuantity / calculatedCapacity) * 100))
+    : 0;
+
+  return {
+    totalDeclaredCapacity,
+    cellCount,
+    calculatedCapacity,
+    occupiedQuantity,
+    occupancyPercentage,
+  };
+}
+
+/**
  * Divide uma área retangular em CÉLULAS INDIVIDUAIS para produtos.
  * Cada célula gerada é um DrawingElement independente com:
  * - Endereçamento WMS exclusivo (ex: Setor A · Vão A01)
  * - Slot de produto individual pronto para inventário/inspeção
  * - Associação de grupo (groupId) para permitir movimentação em grupo
+ * - Capacidade determinística com soma preservada
  */
 export function createGridCells(
   rectangle: DrawingElement,
@@ -91,8 +172,15 @@ export function createGridCells(
   const totalCells = colCount * rowCount;
   const groupId = rectangle.groupId || rectangle.id;
 
+  const totalCapacity = typeof rectangle.capacity === 'number' && rectangle.capacity > 0
+    ? rectangle.capacity
+    : totalCells;
+
+  const distributedCapacities = distributeCapacityDeterministically(totalCapacity, totalCells);
+
   const cells: DrawingElement[] = [];
   let currentY = rectangle.y;
+  let cellIndex = 0;
 
   for (let r = 0; r < rowCount; r++) {
     const isLastRow = r === rowCount - 1;
@@ -111,6 +199,7 @@ export function createGridCells(
       const rowNum = (r + 1).toString().padStart(2, '0');
       const cellAddress = `${colLetter}${rowNum}`;
       const cellName = `${rectangle.name} · Célula ${cellAddress}`;
+      const cellCap = distributedCapacities[cellIndex] ?? 1;
 
       cells.push({
         id: createId('cell'),
@@ -124,7 +213,7 @@ export function createGridCells(
         category: rectangle.category || 'general',
         productSize: rectangle.productSize || 'pallet',
         skuCode: rectangle.skuCode ? `${rectangle.skuCode}-${cellAddress}` : '',
-        capacity: Math.max(1, Math.round((rectangle.capacity || 10) / totalCells)),
+        capacity: cellCap,
         groupId: groupId,
         modules: 1,
         levels: 1,
@@ -135,7 +224,7 @@ export function createGridCells(
             id: `${rectangle.name}-${cellAddress}`,
             sku: rectangle.skuCode ? `${rectangle.skuCode}-${cellAddress}` : '',
             description: `Célula de Armazenagem ${cellAddress} (${rectangle.name})`,
-            quantity: 1,
+            quantity: rectangle.skuCode ? Math.min(cellCap, 1) : 0,
             unit: 'UN',
             status: rectangle.skuCode ? 'occupied' : 'empty',
             productSize: rectangle.productSize || 'pallet',
@@ -146,6 +235,7 @@ export function createGridCells(
       });
 
       currentX += cellW;
+      cellIndex++;
     }
     currentY += cellH;
   }

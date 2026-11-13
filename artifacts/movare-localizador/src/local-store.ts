@@ -1,14 +1,16 @@
 import { initialAreas, type FloorArea, validAreas, DEFAULT_SCALE_RATIO } from './editor-model';
+import { migrateBackupData } from './backup-schema';
 
 const DB_NAME = 'movare-localizador';
 const STORE_NAME = 'workspace';
 const KEY_V2 = 'areas-v2';
 const KEY_V1 = 'areas-v1';
+const KEY_BACKUP_SNAPSHOT = 'movare-hot-snapshot';
 
 function openDatabase(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, 2);
-    request.onupgradeneeded = (event) => {
+    request.onupgradeneeded = () => {
       const db = request.result;
       if (!db.objectStoreNames.contains(STORE_NAME)) {
         db.createObjectStore(STORE_NAME);
@@ -19,94 +21,155 @@ function openDatabase(): Promise<IDBDatabase> {
   });
 }
 
-export async function loadAreas(): Promise<FloorArea[]> {
-  if (typeof indexedDB === 'undefined') {
-    return loadLocalStorageAreas();
+function sanitizeAndMigrateData(raw: unknown): FloorArea[] | null {
+  if (!raw) return null;
+  // Se já for FloorArea[] válido
+  if (validAreas(raw)) {
+    return raw;
   }
-  let db: IDBDatabase;
-  try {
-    db = await openDatabase();
-  } catch {
-    return loadLocalStorageAreas();
-  }
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, 'readonly');
-    const store = tx.objectStore(STORE_NAME);
-    const reqV2 = store.get(KEY_V2);
-
-    reqV2.onsuccess = () => {
-      if (validAreas(reqV2.result)) {
-        db.close();
-        resolve(reqV2.result);
-        return;
-      }
-
-      // Tenta fallback para V1
-      const reqV1 = store.get(KEY_V1);
-      reqV1.onsuccess = () => {
-        const val1 = reqV1.result;
-        db.close();
-        if (validAreas(val1) && val1.some((a) => a.elements.length > 0)) {
-          const migrated = val1.map((a) => ({
-            ...a,
-            scaleRatio: a.scaleRatio ?? DEFAULT_SCALE_RATIO,
-          }));
-          resolve(migrated);
-        } else {
-          resolve(structuredClone(initialAreas));
-        }
-      };
-      reqV1.onerror = () => {
-        db.close();
-        resolve(structuredClone(initialAreas));
-      };
-    };
-    reqV2.onerror = () => {
-      db.close();
-      resolve(structuredClone(initialAreas));
-    };
+  // Tenta migração estruturada
+  const migration = migrateBackupData({
+    format: 'movare-localizador-backup',
+    version: 3,
+    exportedAt: new Date().toISOString(),
+    areas: Array.isArray(raw) ? raw : [raw],
   });
+  if (migration.success && migration.areas.length > 0) {
+    return migration.areas;
+  }
+  return null;
+}
+
+export async function loadAreas(): Promise<FloorArea[]> {
+  // Tenta carregar do IndexedDB primeiro
+  if (typeof indexedDB !== 'undefined') {
+    try {
+      const db = await openDatabase();
+      const dbAreas = await new Promise<FloorArea[] | null>((resolve) => {
+        const tx = db.transaction(STORE_NAME, 'readonly');
+        const store = tx.objectStore(STORE_NAME);
+        const reqV2 = store.get(KEY_V2);
+
+        reqV2.onsuccess = () => {
+          const sanitized = sanitizeAndMigrateData(reqV2.result);
+          if (sanitized && sanitized.length > 0) {
+            db.close();
+            resolve(sanitized);
+            return;
+          }
+
+          // Fallback para V1 no IndexedDB
+          const reqV1 = store.get(KEY_V1);
+          reqV1.onsuccess = () => {
+            const sanV1 = sanitizeAndMigrateData(reqV1.result);
+            db.close();
+            resolve(sanV1);
+          };
+          reqV1.onerror = () => {
+            db.close();
+            resolve(null);
+          };
+        };
+
+        reqV2.onerror = () => {
+          db.close();
+          resolve(null);
+        };
+      });
+
+      if (dbAreas && dbAreas.length > 0) {
+        // Mantém cópia quente atualizada no localStorage
+        saveLocalStorageAreas(dbAreas);
+        return dbAreas;
+      }
+    } catch {
+      // Se falhar ao abrir IndexedDB, prossegue para localStorage
+    }
+  }
+
+  // Fallback resiliente para localStorage
+  const localAreas = loadLocalStorageAreas();
+  if (localAreas && localAreas.length > 0) {
+    // Tenta re-popular o IndexedDB em background
+    if (typeof indexedDB !== 'undefined') {
+      try {
+        const db = await openDatabase();
+        const tx = db.transaction(STORE_NAME, 'readwrite');
+        tx.objectStore(STORE_NAME).put(localAreas, KEY_V2);
+        tx.oncomplete = () => db.close();
+      } catch {
+        // Ignora
+      }
+    }
+    return localAreas;
+  }
+
+  return structuredClone(initialAreas);
 }
 
 export async function saveAreas(areas: FloorArea[]): Promise<void> {
+  // Salva no localStorage como réplica síncrona instantânea à prova de falha
+  saveLocalStorageAreas(areas);
+
   if (typeof indexedDB === 'undefined') {
-    saveLocalStorageAreas(areas);
     return;
   }
-  let db: IDBDatabase;
+
   try {
-    db = await openDatabase();
+    const db = await openDatabase();
+    await new Promise<void>((resolve, reject) => {
+      const transaction = db.transaction(STORE_NAME, 'readwrite');
+      transaction.objectStore(STORE_NAME).put(areas, KEY_V2);
+      transaction.oncomplete = () => {
+        db.close();
+        resolve();
+      };
+      transaction.onerror = () => {
+        db.close();
+        reject(transaction.error);
+      };
+      transaction.onabort = () => {
+        db.close();
+        reject(transaction.error);
+      };
+    });
   } catch {
-    saveLocalStorageAreas(areas);
-    return;
+    // Se o IndexedDB falhar temporariamente, a réplica no localStorage já foi garantida
   }
-  return new Promise((resolve, reject) => {
-    const transaction = db.transaction(STORE_NAME, 'readwrite');
-    transaction.objectStore(STORE_NAME).put(areas, KEY_V2);
-    transaction.oncomplete = () => { db.close(); resolve(); };
-    transaction.onerror = () => { db.close(); reject(transaction.error); };
-    transaction.onabort = () => { db.close(); reject(transaction.error); };
-  });
 }
 
 function loadLocalStorageAreas(): FloorArea[] {
+  // 1. Tenta KEY_V2
   const savedV2 = localStorage.getItem(KEY_V2);
   if (savedV2) {
     try {
       const parsed = JSON.parse(savedV2);
-      if (validAreas(parsed)) return parsed;
+      const sanitized = sanitizeAndMigrateData(parsed);
+      if (sanitized && sanitized.length > 0) return sanitized;
     } catch {
-      // Ignora e tenta v1
+      // Falha no parse, tenta próximo
     }
   }
 
+  // 2. Tenta hot snapshot
+  const hotSnap = localStorage.getItem(KEY_BACKUP_SNAPSHOT);
+  if (hotSnap) {
+    try {
+      const parsed = JSON.parse(hotSnap);
+      const sanitized = sanitizeAndMigrateData(parsed);
+      if (sanitized && sanitized.length > 0) return sanitized;
+    } catch {
+      // Falha no parse, tenta próximo
+    }
+  }
+
+  // 3. Tenta KEY_V1 legado
   const savedV1 = localStorage.getItem(KEY_V1);
   if (savedV1) {
     try {
       const parsed = JSON.parse(savedV1);
-      if (validAreas(parsed) && parsed.some((a) => a.elements.length > 0)) {
-        return parsed.map((a) => ({ ...a, scaleRatio: a.scaleRatio ?? DEFAULT_SCALE_RATIO }));
-      }
+      const sanitized = sanitizeAndMigrateData(parsed);
+      if (sanitized && sanitized.length > 0) return sanitized;
     } catch {
       // Falha
     }
@@ -116,5 +179,11 @@ function loadLocalStorageAreas(): FloorArea[] {
 }
 
 function saveLocalStorageAreas(areas: FloorArea[]) {
-  localStorage.setItem(KEY_V2, JSON.stringify(areas));
+  try {
+    const serialized = JSON.stringify(areas);
+    localStorage.setItem(KEY_V2, serialized);
+    localStorage.setItem(KEY_BACKUP_SNAPSHOT, serialized);
+  } catch {
+    // QuotaExceededError fallback
+  }
 }

@@ -4,6 +4,7 @@ import type {
   InternalLayoutMethod,
   PositionStockStatus,
 } from './zone-internal-positions';
+import { parseAndValidateBackup } from './backup-schema';
 
 export type {
   InternalPosition,
@@ -12,19 +13,8 @@ export type {
   PositionStockStatus,
 };
 
-export type ProductSize =
-  | 'refrigerators'
-  | 'stoves'
-  | 'microwaves'
-  | 'televisions'
-  | 'single_mattress'
-  | 'double_mattress'
-  | 'single_box_base'
-  | 'double_box_base'
-  | 'flat_pack_furniture'
-  | 'sofas'
-  | 'pallet'
-  | 'special';
+import { type ProductSize } from './warehouse-constants';
+export type { ProductSize };
 
 export const PRODUCT_SIZES: { id: ProductSize; label: string; icon: string; short: string; desc: string; dimensions: string }[] = [
   { id: 'refrigerators', label: 'Geladeiras & Freezers', icon: '🧊', short: 'GEL', desc: 'Auto-replicação em linha (0.85m × 0.85m) com mesmo código', dimensions: '0.85m × 0.85m' },
@@ -98,6 +88,7 @@ export type DrawingElement = {
   locked?: boolean;
   internalLayout?: ZoneInternalLayout;
   internalPositions?: InternalPosition[];
+  overflowPositions?: InternalPosition[];
   groupId?: string;
   hidden?: boolean;
 };
@@ -128,12 +119,19 @@ export type Backup = {
   areas: FloorArea[];
 };
 
-export const DEFAULT_SCALE_RATIO = 20; // 20px = 1 metro
-export const DEFAULT_WIDTH_METERS = 85; // 85 metros de largura padrão (1700px)
-export const DEFAULT_HEIGHT_METERS = 55; // 55 metros de comprimento padrão (1100px)
-
-export const WORLD_WIDTH = 1700;
-export const WORLD_HEIGHT = 1100;
+export {
+  DEFAULT_SCALE_RATIO,
+  DEFAULT_WIDTH_METERS,
+  DEFAULT_HEIGHT_METERS,
+  WORLD_WIDTH,
+  WORLD_HEIGHT,
+  createId,
+} from './warehouse-constants';
+import {
+  DEFAULT_SCALE_RATIO,
+  DEFAULT_WIDTH_METERS,
+  DEFAULT_HEIGHT_METERS,
+} from './warehouse-constants';
 
 export function getAreaBounds(area?: FloorArea) {
   const ratio = area?.scaleRatio || DEFAULT_SCALE_RATIO;
@@ -161,9 +159,6 @@ export const WMS_COLOR_PALETTE = [
   { name: 'Paredes & Divisórias (Grafite)', value: '#475569' },
 ];
 
-export function createId(prefix = 'item') {
-  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
-}
 
 // Áreas Iniciais Limpas para o Galpão do Usuário
 export const initialAreas: FloorArea[] = [
@@ -193,7 +188,7 @@ export function validAreas(value: unknown): value is FloorArea[] {
       if (typeof item.name !== 'string' || !item.name.trim()) return false;
       elementIds.add(item.id);
 
-      if (item.color !== undefined && (typeof item.color !== 'string' || !/^#[\da-f]{6}$/i.test(item.color))) return false;
+      if (item.color !== undefined && (typeof item.color !== 'string' || !/^#[\da-fA-F]{6}$/i.test(item.color))) return false;
       if (![item.x, item.y, item.width, item.height].every((n) => typeof n === 'number' && Number.isFinite(n))) return false;
 
       if (item.type === 'rectangle' || item.type === 'rack' || item.type === 'corridor') {
@@ -205,26 +200,12 @@ export function validAreas(value: unknown): value is FloorArea[] {
 }
 
 export function parseBackup(raw: string): FloorArea[] {
-  const parsed: unknown = JSON.parse(raw);
-  if (!parsed || typeof parsed !== 'object') throw new Error('O arquivo não contém um backup válido.');
-  const backup = parsed as Partial<Backup>;
-  if (
-    backup.format !== 'movare-localizador-backup' ||
-    typeof backup.exportedAt !== 'string' ||
-    !Number.isFinite(Date.parse(backup.exportedAt)) ||
-    !validAreas(backup.areas)
-  ) {
-    throw new Error('Backup inválido ou incompatível. Nenhum dado foi alterado.');
+  const result = parseAndValidateBackup(raw);
+  if (!result.success || !result.areas || result.areas.length === 0) {
+    throw new Error(result.error || 'Backup inválido ou incompatível. Nenhum dado foi alterado.');
   }
-
-  return backup.areas.map((area) => ({
-    ...area,
-    scaleRatio: area.scaleRatio ?? DEFAULT_SCALE_RATIO,
-    widthMeters: area.widthMeters ?? DEFAULT_WIDTH_METERS,
-    heightMeters: area.heightMeters ?? DEFAULT_HEIGHT_METERS,
-    elements: area.elements.map((el) => ({
-      ...el,
-      color: el.color ?? (el.type === 'divider' ? '#475569' : el.type === 'rack' ? '#ea580c' : '#b45309'),
-    })),
-  }));
+  return result.areas;
 }
+
+export { parseAndValidateBackup, migrateBackupData, validateAreasDeep, type BackupSummary } from './backup-schema';
+

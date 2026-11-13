@@ -7,7 +7,8 @@ import {
   Lock, Unlock, RotateCw, Sparkles, SlidersHorizontal, ArrowLeftRight,
   Maximize2, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Tag, Target,
   Magnet, Sliders, PanelRightClose, PanelRightOpen, Shield, ShieldCheck,
-  CheckSquare, Square, AlignLeft, AlignCenter, AlignRight, Users, Eye
+  CheckSquare, Square, AlignLeft, AlignCenter, AlignRight, Users, Eye,
+  Camera as CameraIcon
 } from 'lucide-react';
 import {
   initialAreas, parseBackup, createId, DEFAULT_SCALE_RATIO, DEFAULT_WIDTH_METERS, DEFAULT_HEIGHT_METERS,
@@ -35,6 +36,11 @@ import { WarehouseSizeDialog } from '../components/warehouse-size-dialog';
 import { LayersManagerDialog } from '../components/layers-manager-dialog';
 import { MovareSplashScreen } from '../components/movare-splash-screen';
 import { ZoneInternalPositionsManager } from '../components/zone-positions-manager';
+import { SpotlightPalette, type SpotlightCommandAction } from '../components/spotlight-palette';
+import { FloatingActionDock } from '../components/floating-action-dock';
+import { TopCommandBar } from '../components/top-command-bar';
+import { KeyboardShortcutsDialog } from '../components/keyboard-shortcuts-dialog';
+import { PngExportDialog } from '../components/png-export-dialog';
 import {
   WarehouseGeographicLegendSVG,
   FloatingGeographicLegendButton,
@@ -145,6 +151,73 @@ export default function Editor() {
   const [alignmentGuides, setAlignmentGuides] = useState<AlignmentGuide[]>([]);
   const [cursorWorld, setCursorWorld] = useState<Point>({ x: 0, y: 0 });
 
+  const setCameraSafe = useCallback((next: Camera) => {
+    cameraRef.current = next;
+    setCamera(next);
+  }, []);
+
+  const constrainCamera = useCallback((next: Camera): Camera => {
+    if (!canvasSize.width || !canvasSize.height) return next;
+    const visibleMargin = 40;
+    const totalWidth = worldWidth + 330;
+    const scaledWidth = totalWidth * next.scale;
+    const scaledHeight = worldHeight * next.scale;
+    return {
+      ...next,
+      x: Math.max(visibleMargin - scaledWidth, Math.min(canvasSize.width - visibleMargin, next.x)),
+      y: Math.max(visibleMargin - scaledHeight, Math.min(canvasSize.height - visibleMargin, next.y)),
+    };
+  }, [canvasSize.height, canvasSize.width, worldHeight, worldWidth]);
+
+  // Navegação de Precisão CAD (Trava no ponto exato sem escorregamento) vs Inércia
+  const [precisionNavMode, setPrecisionNavMode] = useState(true);
+
+  // Física de Navegação Tátil Calibrada com Amortecimento Firme
+  const velocityRef = useRef({ vx: 0, vy: 0 });
+  const lastMoveTimeRef = useRef(0);
+  const lastScreenRef = useRef<Point>({ x: 0, y: 0 });
+  const momentumAnimRef = useRef<number | null>(null);
+
+  const stopMomentum = useCallback(() => {
+    if (momentumAnimRef.current !== null) {
+      cancelAnimationFrame(momentumAnimRef.current);
+      momentumAnimRef.current = null;
+    }
+  }, []);
+
+  const startMomentum = useCallback((initVx: number, initVy: number) => {
+    stopMomentum();
+    if (precisionNavMode) return;
+    let currentVx = Math.max(-1.0, Math.min(1.0, initVx));
+    let currentVy = Math.max(-1.0, Math.min(1.0, initVy));
+    let lastTime = performance.now();
+
+    const step = (now: number) => {
+      const dt = Math.min(32, Math.max(1, now - lastTime));
+      lastTime = now;
+
+      // Amortecimento firme (0.80) para desaceleração rápida e controlada
+      currentVx *= 0.80;
+      currentVy *= 0.80;
+
+      const cam = cameraRef.current;
+      const nextCamera = constrainCamera({
+        ...cam,
+        x: cam.x + currentVx * dt,
+        y: cam.y + currentVy * dt,
+      });
+      setCameraSafe(nextCamera);
+
+      if (Math.hypot(currentVx, currentVy) > 0.08) {
+        momentumAnimRef.current = requestAnimationFrame(step);
+      } else {
+        momentumAnimRef.current = null;
+      }
+    };
+
+    momentumAnimRef.current = requestAnimationFrame(step);
+  }, [constrainCamera, precisionNavMode, setCameraSafe, stopMomentum]);
+
   // Destaque para busca (persiste até outra interação, navegação pelo mapa não cancela)
   const [highlightId, setHighlightId] = useState<string | null>(null);
 
@@ -200,7 +273,7 @@ export default function Editor() {
   // Modais do Sistema
   const [modal, setModal] = useState<
     'delete' | 'rename' | 'new-area' | 'import' | 'grid' |
-    'search' | 'scale' | 'warehouse-size' | 'layers' | null
+    'search' | 'scale' | 'warehouse-size' | 'layers' | 'spotlight' | 'shortcuts' | 'rack-gen' | 'png-export' | null
   >(null);
 
   // Modo de Edição Individual de Espaço (Sub-Mapa / Foco Isolado)
@@ -222,24 +295,6 @@ export default function Editor() {
       return next;
     });
   }, []);
-
-  const setCameraSafe = useCallback((next: Camera) => {
-    cameraRef.current = next;
-    setCamera(next);
-  }, []);
-
-  const constrainCamera = useCallback((next: Camera): Camera => {
-    if (!canvasSize.width || !canvasSize.height) return next;
-    const visibleMargin = 40;
-    const totalWidth = worldWidth + 330;
-    const scaledWidth = totalWidth * next.scale;
-    const scaledHeight = worldHeight * next.scale;
-    return {
-      ...next,
-      x: Math.max(visibleMargin - scaledWidth, Math.min(canvasSize.width - visibleMargin, next.x)),
-      y: Math.max(visibleMargin - scaledHeight, Math.min(canvasSize.height - visibleMargin, next.y)),
-    };
-  }, [canvasSize.height, canvasSize.width, worldHeight, worldWidth]);
 
   const recordAreas = useCallback((next: FloorArea[]) => {
     const before = clone(areasRef.current);
@@ -394,7 +449,17 @@ export default function Editor() {
 
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault();
-        setModal('search');
+        setModal('spotlight');
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'e') {
+        e.preventDefault();
+        setModal('png-export');
+        return;
+      }
+      if (e.key === 'F1' || (e.key === '?' && !e.ctrlKey && !e.metaKey)) {
+        e.preventDefault();
+        setModal('shortcuts');
         return;
       }
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
@@ -405,10 +470,12 @@ export default function Editor() {
       }
 
       switch (e.key.toLowerCase()) {
-        case 'v': setTool('select'); break;
-        case 'r': setTool('rectangle'); break;
-        case 'm': setTool('measure'); break;
-        case 'h': setTool('pan'); break;
+        case 'v': setTool('select'); setMeasureLine(null); break;
+        case 'm': setTool('move'); setMeasureLine(null); break;
+        case 'h': setTool('pan'); setMeasureLine(null); break;
+        case 'r': setTool('rectangle'); setMeasureLine(null); break;
+        case 'c': setTool('corridor'); setMeasureLine(null); break;
+        case 't': setTool('measure'); break;
         case 'l':
           if (selected) toggleLockSelected();
           break;
@@ -510,11 +577,13 @@ export default function Editor() {
     setCameraSafe(constrainCamera({ scale: nextScale, x: anchor.x - world.x * nextScale, y: anchor.y - world.y * nextScale }));
   }
 
-  // Zoom suave com a rodinha do mouse no desktop
+  // Zoom suave e proporcional para rodinha de mouse e trackpad
   function handleWheel(e: WheelEvent<HTMLDivElement>) {
     e.preventDefault();
     const screen = pointToScreen(e.clientX, e.clientY);
-    const zoomFactor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+    const rawDelta = e.deltaY;
+    const delta = e.deltaMode === 1 ? rawDelta * 16 : e.deltaMode === 2 ? rawDelta * 100 : rawDelta;
+    const zoomFactor = Math.max(0.90, Math.min(1.10, 1 - delta * 0.0012));
     zoomBy(zoomFactor, screen);
   }
 
@@ -673,10 +742,17 @@ export default function Editor() {
   function pointerDown(event: PointerEvent<SVGSVGElement>) {
     if (event.button !== 0 && event.pointerType !== 'touch') return;
     event.preventDefault();
+    stopMomentum();
     setAlignmentGuides([]);
     const screen = pointToScreen(event.clientX, event.clientY);
     pointersRef.current.set(event.pointerId, screen);
-    event.currentTarget.setPointerCapture(event.pointerId);
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch {}
+
+    lastMoveTimeRef.current = performance.now();
+    lastScreenRef.current = screen;
+    velocityRef.current = { vx: 0, vy: 0 };
 
     // Zoom por pinch em mobile
     if (pointersRef.current.size >= 2) {
@@ -698,7 +774,9 @@ export default function Editor() {
     }
 
     const world = pointToWorld(event.clientX, event.clientY);
-    setCursorWorld(world);
+    if (event.pointerType !== 'touch') {
+      setCursorWorld(world);
+    }
     const target = event.target as Element;
 
     // Alça de rotação tátil
@@ -831,18 +909,38 @@ export default function Editor() {
   function pointerMove(event: PointerEvent<SVGSVGElement>) {
     const screen = pointToScreen(event.clientX, event.clientY);
     pointersRef.current.set(event.pointerId, screen);
-    const world = pointToWorld(event.clientX, event.clientY);
-    setCursorWorld(world);
+
+    // Rastreamento contínuo de velocidade para inércia cinemática fluida
+    const now = performance.now();
+    const dt = Math.max(1, now - lastMoveTimeRef.current);
+    if (dt < 120) {
+      const vx = (screen.x - lastScreenRef.current.x) / dt;
+      const vy = (screen.y - lastScreenRef.current.y) / dt;
+      velocityRef.current = {
+        vx: velocityRef.current.vx * 0.35 + vx * 0.65,
+        vy: velocityRef.current.vy * 0.35 + vy * 0.65,
+      };
+    }
+    lastMoveTimeRef.current = now;
+    lastScreenRef.current = screen;
 
     const gesture = gestureRef.current;
+
+    // Otimização crucial: só atualiza cursorWorld no hover do mouse, nunca no touch drag para manter 60-120 FPS
+    if (!gesture && event.pointerType !== 'touch') {
+      const world = pointToWorld(event.clientX, event.clientY);
+      setCursorWorld(world);
+    }
+
     if (!gesture) return;
 
     if (gesture.kind === 'pinch') {
       const first = pointersRef.current.get(gesture.ids[0]);
       const second = pointersRef.current.get(gesture.ids[1]);
       if (!first || !second) return;
+      const currentDist = dist(first, second);
       const mid = { x: (first.x + second.x) / 2, y: (first.y + second.y) / 2 };
-      const scale = Math.max(0.08, Math.min(4.5, gesture.camera.scale * (dist(first, second) / gesture.distance)));
+      const scale = Math.max(0.08, Math.min(4.5, gesture.camera.scale * (currentDist / gesture.distance)));
       setCameraSafe(constrainCamera({ scale, x: mid.x - gesture.anchor.x * scale, y: mid.y - gesture.anchor.y * scale }));
       return;
     }
@@ -851,6 +949,7 @@ export default function Editor() {
 
     // Rotação tátil suave
     if (gesture.kind === 'rotate') {
+      const world = pointToWorld(event.clientX, event.clientY);
       const currentAngle = Math.atan2(world.y - gesture.center.y, world.x - gesture.center.x) * (180 / Math.PI);
       const deltaAngle = currentAngle - gesture.initialAngle;
       let rawRotation = (gesture.initialRotation + deltaAngle) % 360;
@@ -898,30 +997,32 @@ export default function Editor() {
       return;
     }
 
-    // Limiar tátil anti-toque acidental durante navegação no modo selecionar
+    // Limiar tátil anti-toque acidental durante navegação no modo selecionar:
+    // 10px calibrado para permitir seleção limpa e precisa de células sem converter em pan por engano
     if (gesture.kind === 'pending_select') {
       const deltaPx = dist(screen, gesture.startScreen);
-      if (deltaPx > 7) {
+      if (deltaPx > 10) {
         if (pendingCellTapRef.current) {
           pendingCellTapRef.current = null;
         }
-        setCameraSafe(
-          constrainCamera({
-            ...gesture.camera,
-            x: gesture.camera.x + screen.x - gesture.startScreen.x,
-            y: gesture.camera.y + screen.y - gesture.startScreen.y,
-          })
-        );
+        gestureRef.current = {
+          kind: 'pan',
+          pointerId: event.pointerId,
+          startScreen: screen,
+          camera: cameraRef.current,
+        };
       }
       return;
     }
 
     if (pendingCellTapRef.current) {
       const cellDelta = dist(screen, pendingCellTapRef.current.startScreen);
-      if (cellDelta > 7) {
+      if (cellDelta > 10) {
         pendingCellTapRef.current = null;
       }
     }
+
+    const world = pointToWorld(event.clientX, event.clientY);
 
     if (gesture.kind === 'pan' || gesture.kind === 'empty_pan_or_deselect') {
       setCameraSafe(
@@ -1017,11 +1118,29 @@ export default function Editor() {
   }
 
   function pointerUp(event: PointerEvent<SVGSVGElement>) {
+    try {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    } catch {}
     const gesture = gestureRef.current;
     pointersRef.current.delete(event.pointerId);
     if (!gesture) return;
 
     if (gesture.kind === 'pinch') {
+      // Se ainda resta um dedo na tela após o pinch, continua navegando suavemente em pan
+      if (pointersRef.current.size === 1) {
+        const remainingId = [...pointersRef.current.keys()][0];
+        const remainingScreen = pointersRef.current.get(remainingId)!;
+        gestureRef.current = {
+          kind: 'pan',
+          pointerId: remainingId,
+          startScreen: remainingScreen,
+          camera: cameraRef.current,
+        };
+        lastMoveTimeRef.current = performance.now();
+        lastScreenRef.current = remainingScreen;
+        velocityRef.current = { vx: 0, vy: 0 };
+        return;
+      }
       gestureRef.current = null;
       return;
     }
@@ -1036,6 +1155,27 @@ export default function Editor() {
           setSelectedId(null);
           setSelectedPositionId(null);
         }
+      } else {
+        const now = performance.now();
+        const isTouch = event.pointerType === 'touch';
+        const timeSinceMove = now - lastMoveTimeRef.current;
+        const speed = Math.hypot(velocityRef.current.vx, velocityRef.current.vy);
+        if (!precisionNavMode && isTouch && speed >= 0.75 && timeSinceMove < 45) {
+          startMomentum(velocityRef.current.vx, velocityRef.current.vy);
+        }
+      }
+      gestureRef.current = null;
+      return;
+    }
+
+    // Se liberou no modo pan direto (Mão ou arrasto contínuo)
+    if (gesture.kind === 'pan') {
+      const now = performance.now();
+      const isTouch = event.pointerType === 'touch';
+      const timeSinceMove = now - lastMoveTimeRef.current;
+      const speed = Math.hypot(velocityRef.current.vx, velocityRef.current.vy);
+      if (!precisionNavMode && isTouch && speed >= 0.75 && timeSinceMove < 45) {
+        startMomentum(velocityRef.current.vx, velocityRef.current.vy);
       }
       gestureRef.current = null;
       return;
@@ -1139,7 +1279,7 @@ export default function Editor() {
           y: gesture.type === 'rectangle' ? rectY : gesture.startWorld.y,
           width: gesture.type === 'rectangle' ? rectWidth : lineDx,
           height: gesture.type === 'rectangle' ? rectHeight : lineDy,
-          productSize: 'medium_box',
+          productSize: 'pallet',
           category: 'general',
         };
         patchActive((area) => ({ ...area, elements: [...area.elements, item] }));
@@ -1210,9 +1350,12 @@ export default function Editor() {
           finalItem = {
             ...finalItem,
             internalPositions: resizeResult.positions,
+            overflowPositions: resizeResult.overflowOccupiedPositions.length > 0
+              ? resizeResult.overflowOccupiedPositions
+              : finalItem.overflowPositions,
           };
           if (resizeResult.hasLossWarning) {
-            setToast(`Atenção: Dimensões reduzidas. ${resizeResult.overflowOccupiedPositions.length} posições com estoque foram preservadas.`);
+            setToast(`Atenção: Dimensões reduzidas. ${resizeResult.overflowOccupiedPositions.length} posições com estoque foram retidas com segurança no overflow.`);
           }
         }
         replaceItem(finalItem);
@@ -1225,6 +1368,31 @@ export default function Editor() {
     setGroupPreview(null);
     setAlignmentGuides([]);
     setIsDragging(false);
+  }
+
+  function pointerCancel(event: PointerEvent<SVGSVGElement>) {
+    try {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    } catch {}
+    pointersRef.current.delete(event.pointerId);
+    if (pointersRef.current.size === 1 && gestureRef.current?.kind === 'pinch') {
+      const remainingId = [...pointersRef.current.keys()][0];
+      const remainingScreen = pointersRef.current.get(remainingId)!;
+      gestureRef.current = {
+        kind: 'pan',
+        pointerId: remainingId,
+        startScreen: remainingScreen,
+        camera: cameraRef.current,
+      };
+      return;
+    }
+    if (pointersRef.current.size === 0) {
+      gestureRef.current = null;
+      setPreview(null);
+      setGroupPreview(null);
+      setAlignmentGuides([]);
+      setIsDragging(false);
+    }
   }
 
   // Desfazer & Refazer
@@ -1467,6 +1635,87 @@ export default function Editor() {
     setToast('Backup restaurado com sucesso.');
   };
 
+  // Ações do Spotlight Command Palette
+  const handleSpotlightAction = useCallback((action: SpotlightCommandAction) => {
+    switch (action) {
+      case 'new_warehouse':
+        createNewArea();
+        break;
+      case 'resize_warehouse':
+        setModal('warehouse-size');
+        break;
+      case 'fit_plan':
+        fitPlan();
+        setToast('Planta enquadrada');
+        break;
+      case 'open_layers':
+        setModal('layers');
+        break;
+      case 'toggle_theme':
+        toggleTheme();
+        break;
+      case 'export_png':
+        setModal('png-export');
+        break;
+      case 'export_backup':
+        exportBackup();
+        break;
+      case 'import_backup':
+        fileInputRef.current?.click();
+        break;
+      case 'open_calibration':
+        setModal('scale');
+        break;
+      case 'open_shortcuts':
+        setModal('shortcuts');
+        break;
+      case 'mode_select':
+        setTool('select');
+        setMeasureLine(null);
+        setToast('Modo Seleção Ativado');
+        break;
+      case 'mode_move':
+        setTool('move');
+        setMeasureLine(null);
+        setToast('Modo Mover Ativado');
+        break;
+      case 'mode_pan':
+        setTool('pan');
+        setMeasureLine(null);
+        setToast('Modo Navegar Ativado');
+        break;
+      case 'mode_zone':
+        setTool('rectangle');
+        setMeasureLine(null);
+        setToast('Modo Nova Zona: Arraste no mapa');
+        break;
+      case 'mode_corridor':
+        setTool('corridor');
+        setMeasureLine(null);
+        setToast('Modo Corredores: Clique no mapa');
+        break;
+      case 'mode_measure':
+        setTool('measure');
+        setToast('Fita Métrica: Clique em dois pontos');
+        break;
+    }
+  }, [fitPlan, toggleTheme]);
+
+  const handleSpotlightNavigate = useCallback(
+    (targetAreaId: string, elementId: string, x: number, y: number, name: string, code?: string) => {
+      if (targetAreaId !== activeId) {
+        setActiveId(targetAreaId);
+      }
+      setSelectedId(elementId);
+      setSelectedPositionId(null);
+      setHighlightId(elementId);
+      navigateToPoint(x, y, 1.4);
+      setDesktopSidebarOpen(true);
+      setToast(`Localizado: ${name}`);
+    },
+    [activeId, navigateToPoint, setSelectedId]
+  );
+
   // Medição métrica ativa
   const measureDistanceM = useMemo(() => {
     if (!measureLine) return null;
@@ -1483,303 +1732,61 @@ export default function Editor() {
         isDark ? 'dark bg-slate-950 text-slate-100' : 'bg-slate-100 text-slate-900'
       }`}
     >
-      {/* 1. HEADER COMPACTO, ENXUTO E MODERNO */}
-      <header
-        className={`h-11 shrink-0 flex items-center justify-between gap-2 px-2.5 sm:px-3 border-b z-20 backdrop-blur-md ${
-          isDark ? 'bg-slate-900/95 border-slate-800' : 'bg-white/95 border-slate-200 shadow-xs'
-        }`}
-      >
-        {/* Identidade Movare Oficial & Seletor de Galpão */}
-        <div className="flex items-center gap-2 sm:gap-2.5 min-w-0">
-          <div className="h-8 sm:h-8.5 flex items-center shrink-0">
-            <img
-              src="/movare-logo.png"
-              alt="MOVARE Móveis e eletros"
-              className="h-7 sm:h-8 w-auto object-contain drop-shadow-sm rounded"
-            />
-          </div>
+      {/* 1. TOP COMMAND BAR 4.0 (BARRA COMPACTA COM GAVETAS INTELIGENTES) */}
+      <TopCommandBar
+        areas={areas}
+        activeAreaId={activeId}
+        onSelectArea={(id) => setActiveId(id)}
+        onCreateNewArea={createNewArea}
+        bounds={bounds}
+        onOpenResizeDialog={() => setModal('warehouse-size')}
+        tool={tool}
+        onSelectTool={(t) => {
+          setTool(t);
+          setMeasureLine(null);
+          if (t === 'select') setToast('Modo Seleção Ativado');
+        }}
+        snapEnabled={snapEnabled}
+        onToggleSnap={() => setSnapEnabled(!snapEnabled)}
+        physicsEnabled={physicsEnabled}
+        onTogglePhysics={() => setPhysicsEnabled(!physicsEnabled)}
+        multiSelectMode={isMultiSelectMode}
+        onToggleMultiSelect={() => setIsMultiSelectMode(!isMultiSelectMode)}
+        precisionNavMode={precisionNavMode}
+        onTogglePrecisionNav={() => {
+          setPrecisionNavMode((prev) => {
+            const next = !prev;
+            setToast(next ? 'Precisão CAD Ativada (Sem inércia)' : 'Inércia Tátil Ativada');
+            return next;
+          });
+        }}
+        canUndo={history.length > 0}
+        onUndo={undo}
+        canRedo={future.length > 0}
+        onRedo={redo}
+        onOpenSpotlight={() => setModal('spotlight')}
+        onOpenLayers={() => setModal('layers')}
+        onOpenShortcuts={() => setModal('shortcuts')}
+        onOpenPngExport={() => setModal('png-export')}
+        onExportBackup={exportBackup}
+        onImportBackup={() => fileInputRef.current?.click()}
+        isDark={isDark}
+        onToggleTheme={toggleTheme}
+        selectedElementCount={selectedIds.length}
+        sidebarOpen={desktopSidebarOpen}
+        onToggleSidebar={() => setDesktopSidebarOpen(!desktopSidebarOpen)}
+        onOpenMobileMenu={() => setMobileMenuOpen(true)}
+      />
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="application/json,.json"
+        hidden
+        onChange={(e) => void readImport(e.target.files?.[0])}
+      />
 
-          {/* Pod Integrado de Galpão */}
-          <div className="flex items-center bg-slate-950/70 border border-slate-800 rounded-md px-1 py-0.5 min-w-0">
-            <select
-              aria-label="Escolher galpão"
-              className="text-xs font-semibold bg-transparent border-0 text-slate-200 pr-5 appearance-none cursor-pointer truncate max-w-[100px] sm:max-w-[150px] md:max-w-[190px] focus:outline-none"
-              value={activeId}
-              onChange={(e) => setActiveId(e.target.value)}
-            >
-              {areas.map((a) => (
-                <option key={a.id} value={a.id} className="bg-slate-900 text-slate-200">
-                  {a.name}
-                </option>
-              ))}
-            </select>
-            <ChevronDown className="w-3 h-3 text-slate-400 -ml-4 pointer-events-none shrink-0" />
-            <button
-              type="button"
-              onClick={createNewArea}
-              title="Adicionar Novo Galpão"
-              className="p-0.5 ml-1 text-slate-400 hover:text-orange-400 transition-colors"
-            >
-              <Plus className="w-3.5 h-3.5" />
-            </button>
-          </div>
-
-          {/* Dimensões em Metros (Acesso Direto à Configuração de Tamanho) */}
-          <button
-            type="button"
-            onClick={() => setModal('warehouse-size')}
-            className={`hidden md:flex items-center gap-1 px-1.5 py-0.5 rounded-md border text-[11px] font-mono transition-colors ${
-              isDark
-                ? 'bg-slate-950/50 border-slate-800 text-slate-300 hover:border-orange-500/50 hover:text-orange-300'
-                : 'bg-slate-100 border-slate-300 text-slate-700 hover:border-orange-500'
-            }`}
-            title="Dimensões do Galpão (Clique para redimensionar)"
-          >
-            <Maximize2 className="w-3 h-3 text-orange-400" />
-            <span className="tabular-nums">{bounds.widthMeters}×{bounds.heightMeters}m</span>
-          </button>
-        </div>
-
-        {/* Barra Central Enxuta: Bibliotecas e Gestão WMS */}
-        <div className="flex items-center gap-1.5 shrink-0">
-          {/* Pod: Camadas & Busca Rápida WMS */}
-          <div className="flex items-center p-0.5 rounded-lg border border-slate-800 bg-slate-950/60">
-            <button
-              type="button"
-              onClick={() => setModal('layers')}
-              className="flex items-center gap-1.5 px-2 py-1 rounded text-xs font-semibold text-slate-300 hover:text-white hover:bg-slate-800/70 transition-colors"
-              title="Camadas & Visibilidade de Espaços"
-            >
-              <Layers className="w-3.5 h-3.5 text-orange-400 shrink-0" />
-              <span className="hidden sm:inline">Camadas</span>
-            </button>
-            <div className="w-px h-3.5 bg-slate-800" />
-            <button
-              type="button"
-              onClick={() => setModal('search')}
-              className="flex items-center gap-1.5 px-2 py-1 rounded text-xs font-medium text-slate-200 hover:text-white hover:bg-slate-800/70 transition-colors"
-              title="Buscar Espaço, Produto ou SKU no Mapa (Ctrl+K)"
-            >
-              <Search className="w-3.5 h-3.5 text-orange-400 shrink-0" />
-              <span className="hidden md:inline">Buscar</span>
-              <kbd className="hidden lg:inline font-mono text-[9px] px-1 py-0.2 rounded bg-slate-800 text-slate-400 border border-slate-700">
-                Ctrl+K
-              </kbd>
-            </button>
-            <div className="w-px h-3.5 bg-slate-800" />
-            <button
-              type="button"
-              onClick={() => handleAddCorridorLabel()}
-              className="flex items-center gap-1.5 px-2 py-1 rounded text-xs font-semibold text-sky-400 hover:text-sky-200 hover:bg-slate-800/70 transition-colors"
-              title="Adicionar Identificação de Corredor / Rua (Apenas palavras sem background)"
-            >
-              <Tag className="w-3.5 h-3.5 shrink-0" />
-              <span className="hidden sm:inline">+ Corredor</span>
-            </button>
-          </div>
-
-          {/* Pod 3: Sistema, Backup & Tema */}
-          <div className="flex items-center gap-1 pl-1">
-            {/* Backup no Desktop */}
-            <div className="hidden sm:flex items-center rounded-md border border-slate-800 bg-slate-950/60 p-0.5">
-              <button
-                type="button"
-                onClick={exportBackup}
-                title="Exportar Backup JSON"
-                className="p-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition-colors"
-              >
-                <ArrowDownToLine className="w-3.5 h-3.5" />
-              </button>
-              <div className="w-px h-3 bg-slate-800" />
-              <button
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                title="Importar Backup JSON"
-                className="p-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition-colors"
-              >
-                <ArrowUpFromLine className="w-3.5 h-3.5" />
-              </button>
-            </div>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="application/json,.json"
-              hidden
-              onChange={(e) => void readImport(e.target.files?.[0])}
-            />
-
-            {/* Alternar Tema */}
-            <button
-              type="button"
-              onClick={toggleTheme}
-              className="p-1.5 rounded-md text-slate-400 hover:text-slate-100 hover:bg-slate-800/60 transition-colors"
-              title="Alternar Tema Claro / Escuro"
-            >
-              {isDark ? <Sun className="w-3.5 h-3.5 text-amber-400" /> : <Moon className="w-3.5 h-3.5 text-slate-700" />}
-            </button>
-
-            {/* Menu Rápido Mobile (Acesso Completo a Funções) */}
-            <button
-              type="button"
-              onClick={() => setMobileMenuOpen(true)}
-              className="sm:hidden p-1.5 rounded-md text-slate-300 bg-slate-800 hover:bg-slate-700 transition-colors"
-              title="Menu de Funções"
-            >
-              <SlidersHorizontal className="w-4 h-4 text-orange-400" />
-            </button>
-          </div>
-        </div>
-      </header>
-
-      {/* 2. ÁREA CENTRAL: CANVAS VIEWPORT & TOOLBAR */}
+      {/* 2. ÁREA CENTRAL: CANVAS VIEWPORT EM TELA TOTAL (MAXIMIZADO) */}
       <div className="flex-1 flex overflow-hidden relative">
-        {/* BARRA DE FERRAMENTAS LATERAL DESKTOP ENXUTA (MD+) */}
-        <aside
-          className={`hidden md:flex w-11 shrink-0 flex-col items-center py-2 gap-1 border-r z-10 ${
-            isDark ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200 shadow-xs'
-          }`}
-        >
-          {/* Grupo 1: Modos (Selecionar, Mover, Visualizar) */}
-          <div className="flex flex-col items-center gap-1">
-            <button
-              type="button"
-              onClick={() => { setTool('select'); setMeasureLine(null); }}
-              className={`w-8 h-8 rounded-md flex items-center justify-center transition-all ${
-                tool === 'select' ? 'bg-red-600 text-white shadow-xs' : 'text-slate-400 hover:text-slate-100 hover:bg-slate-800/60'
-              }`}
-              title="Modo Selecionar (V)"
-            >
-              <MousePointer2 className="w-4 h-4" />
-            </button>
-            <button
-              type="button"
-              onClick={() => { setTool('move'); setMeasureLine(null); }}
-              className={`w-8 h-8 rounded-md flex items-center justify-center transition-all ${
-                tool === 'move' ? 'bg-red-600 text-white shadow-xs' : 'text-slate-400 hover:text-slate-100 hover:bg-slate-800/60'
-              }`}
-              title="Modo Mover Elementos"
-            >
-              <Move className="w-4 h-4" />
-            </button>
-            <button
-              type="button"
-              onClick={() => { setTool('pan'); setMeasureLine(null); }}
-              className={`w-8 h-8 rounded-md flex items-center justify-center transition-all ${
-                tool === 'pan' ? 'bg-red-600 text-white shadow-xs' : 'text-slate-400 hover:text-slate-100 hover:bg-slate-800/60'
-              }`}
-              title="Modo Visualizar / Navegar pelo Mapa (H)"
-            >
-              <Eye className="w-4 h-4" />
-            </button>
-          </div>
-
-          <div className="w-5 h-px bg-slate-800 my-0.5" />
-
-          {/* Grupo 2: Desenho & Geradores */}
-          <div className="flex flex-col items-center gap-1">
-            <button
-              type="button"
-              onClick={() => { setTool('rectangle'); setMeasureLine(null); }}
-              className={`w-8 h-8 rounded-md flex items-center justify-center transition-all ${
-                tool === 'rectangle' ? 'bg-red-600 text-white shadow-xs' : 'text-slate-400 hover:text-slate-100 hover:bg-slate-800/60'
-              }`}
-              title="Desenhar Área / Bloco (R)"
-            >
-              <RectangleHorizontal className="w-4 h-4" />
-            </button>
-            <button
-              type="button"
-              onClick={() => { setTool('measure'); }}
-              className={`w-8 h-8 rounded-md flex items-center justify-center transition-all ${
-                tool === 'measure' ? 'bg-red-600 text-white shadow-xs' : 'text-slate-400 hover:text-slate-100 hover:bg-slate-800/60'
-              }`}
-              title="Fita Métrica CAD (M)"
-            >
-              <Ruler className="w-4 h-4" />
-            </button>
-            <button
-              type="button"
-              onClick={() => { setTool('corridor'); setMeasureLine(null); setToast('Modo Corredores: Clique no mapa com a mira para posicionar ou editar corredores'); }}
-              className={`w-8 h-8 rounded-md flex items-center justify-center transition-all ${
-                tool === 'corridor' ? 'bg-red-600 text-white shadow-xs' : 'text-sky-400 hover:text-sky-200 hover:bg-slate-800/60'
-              }`}
-              title="Modo Corredor / Rua (C)"
-            >
-              <Tag className="w-4 h-4" />
-            </button>
-          </div>
-
-          <div className="w-5 h-px bg-slate-800 my-0.5" />
-
-          {/* Grupo 3: Precisão, Snap e Física */}
-          <div className="flex flex-col items-center gap-1">
-            <button
-              type="button"
-              onClick={() => {
-                setSnapEnabled((prev) => !prev);
-                setToast(!snapEnabled ? 'Magnetismo / Snap Ativado' : 'Movimento Livre sem Snap Ativado');
-              }}
-              className={`w-8 h-8 rounded-md flex items-center justify-center transition-all ${
-                snapEnabled ? 'text-red-400 bg-red-500/15' : 'text-slate-500 hover:bg-slate-800/60'
-              }`}
-              title={snapEnabled ? 'Magnetismo / Snap Ativo (Clique para desativar)' : 'Movimento Livre sem Snap (Clique para ativar)'}
-            >
-              <Magnet className="w-4 h-4" />
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setPhysicsEnabled((prev) => !prev);
-                setToast(!physicsEnabled ? 'Física Anti-Sobreposição Ativada' : 'Física Desativada');
-              }}
-              className={`w-8 h-8 rounded-md flex items-center justify-center transition-all ${
-                physicsEnabled ? 'text-emerald-400 bg-emerald-500/15' : 'text-slate-500 hover:bg-slate-800/60'
-              }`}
-              title={physicsEnabled ? 'Física Anti-Sobreposição Ativa (Clique para desativar)' : 'Física Desativada (Clique para ativar)'}
-            >
-              <ShieldCheck className="w-4 h-4" />
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setIsMultiSelectMode((prev) => !prev);
-                setToast(!isMultiSelectMode ? 'Modo Seleção Múltipla Ativado' : 'Modo Seleção Individual');
-              }}
-              className={`w-8 h-8 rounded-md flex items-center justify-center transition-all ${
-                isMultiSelectMode ? 'bg-blue-600 text-white shadow-xs' : 'text-slate-400 hover:bg-slate-800/60'
-              }`}
-              title={isMultiSelectMode ? 'Seleção Múltipla Ativa' : 'Ativar Seleção Múltipla'}
-            >
-              <CheckSquare className="w-4 h-4" />
-            </button>
-          </div>
-
-          <div className="w-5 h-px bg-slate-800 my-0.5" />
-
-          {/* Grupo 4: Histórico Undo / Redo */}
-          <div className="flex flex-col items-center gap-1 mt-auto">
-            <button
-              type="button"
-              onClick={undo}
-              disabled={!history.length}
-              className="w-8 h-7 rounded-md flex items-center justify-center text-slate-400 hover:text-slate-100 disabled:opacity-25 transition-colors"
-              title="Desfazer (Ctrl+Z)"
-            >
-              <RotateCcw className="w-3.5 h-3.5" />
-            </button>
-            <button
-              type="button"
-              onClick={redo}
-              disabled={!future.length}
-              className="w-8 h-7 rounded-md flex items-center justify-center text-slate-400 hover:text-slate-100 disabled:opacity-25 transition-colors"
-              title="Refazer (Ctrl+Y)"
-            >
-              <Redo2 className="w-3.5 h-3.5" />
-            </button>
-          </div>
-        </aside>
-
-        {/* 2. CONTAINER DO CANVAS COM WHEEL ZOOM & TOUCH CONTROL (SEM MENU SPLIT) */}
         <div className="flex-1 flex flex-col overflow-hidden relative">
           {/* RÉGUA HORIZONTAL (APENAS DESKTOP MD+) */}
           <div
@@ -1920,6 +1927,8 @@ export default function Editor() {
                 onPointerDown={pointerDown}
                 onPointerMove={pointerMove}
                 onPointerUp={pointerUp}
+                onPointerCancel={pointerCancel}
+                onPointerLeave={pointerCancel}
               >
                 <defs>
                   {/* Grade CAD Métrica Subordinada (1m e 5m) */}
@@ -2828,166 +2837,41 @@ export default function Editor() {
                 </g>
               </svg>
 
-              {/* BARRA DE AÇÕES FLUTUANTE ABERTA PELO BOTÃO FLUTUANTE '+' */}
-              <div className="absolute bottom-5 left-1/2 -translate-x-1/2 z-30 flex flex-col items-center gap-2 pointer-events-auto">
-                {/* PAINEL EXPANDIDO DA BARRA DE AÇÕES (FAIXA HORIZONTAL) */}
-                {showActionBar && (
-                  <div className="flex flex-row items-center gap-1.5 p-2 rounded-2xl bg-slate-900/95 border border-slate-700/80 shadow-2xl backdrop-blur-xl animate-fade-in text-xs font-semibold text-slate-200 max-w-[95vw] overflow-x-auto whitespace-nowrap scrollbar-none">
-                    {/* 1. MODO SELECIONAR */}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setTool('select');
-                        setMeasureLine(null);
-                        setShowActionBar(false);
-                        setToast('Modo Selecionar: Clique para inspecionar e editar');
-                      }}
-                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl transition-all shrink-0 ${
-                        tool === 'select'
-                          ? 'bg-red-600 text-white shadow-md font-bold'
-                          : 'text-slate-300 hover:text-white hover:bg-slate-800'
-                      }`}
-                    >
-                      <MousePointer2 className="w-4 h-4 text-slate-200" />
-                      <span>Selecionar</span>
-                    </button>
-
-                    {/* 2. MODO MOVER */}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setTool('move');
-                        setMeasureLine(null);
-                        setMobileDrawerOpen(false);
-                        setDesktopSidebarOpen(false);
-                        setShowActionBar(false);
-                        setToast('Modo Mover: Apenas mover e redimensionar no mapa');
-                      }}
-                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl transition-all shrink-0 ${
-                        tool === 'move'
-                          ? 'bg-red-600 text-white shadow-md font-bold'
-                          : 'text-slate-300 hover:text-white hover:bg-slate-800'
-                      }`}
-                    >
-                      <Move className="w-4 h-4" />
-                      <span>Mover</span>
-                    </button>
-
-                    {/* 3. MODO VISUALIZAR */}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setTool('pan');
-                        setMeasureLine(null);
-                        setShowActionBar(false);
-                        setToast('Modo Visualizar: Arraste para navegar');
-                      }}
-                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl transition-all shrink-0 ${
-                        tool === 'pan'
-                          ? 'bg-red-600 text-white shadow-md font-bold'
-                          : 'text-slate-300 hover:text-white hover:bg-slate-800'
-                      }`}
-                    >
-                      <Eye className="w-4 h-4" />
-                      <span>Visualizar</span>
-                    </button>
-
-                    <div className="w-px h-5 bg-slate-700/80 mx-1 shrink-0" />
-
-                    {/* DESENHAR NOVA ZONA */}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setTool('rectangle');
-                        setMeasureLine(null);
-                        setShowActionBar(false);
-                        setToast('Desenhar Nova Zona: Arraste no mapa');
-                      }}
-                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl transition-all shrink-0 ${
-                        tool === 'rectangle' ? 'bg-red-600 text-white font-bold shadow-md' : 'text-slate-300 hover:bg-slate-800'
-                      }`}
-                    >
-                      <RectangleHorizontal className="w-4 h-4 text-red-400" />
-                      <span>Nova Zona</span>
-                    </button>
-
-                    {/* CRIAR / MODO CORREDOR */}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setTool('corridor');
-                        setMeasureLine(null);
-                        setShowActionBar(false);
-                        setToast('Modo Corredores: Clique no mapa com a mira para posicionar ou editar corredores');
-                      }}
-                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl transition-all shrink-0 ${
-                        tool === 'corridor' ? 'bg-red-600 text-white font-bold shadow-md' : 'text-slate-300 hover:bg-slate-800'
-                      }`}
-                    >
-                      <Tag className="w-4 h-4 text-emerald-400" />
-                      <span>Corredor</span>
-                    </button>
-
-                    {/* FITA MÉTRICA */}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setTool('measure');
-                        setShowActionBar(false);
-                        setToast('Modo Fita Métrica: Clique em dois pontos para medir');
-                      }}
-                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl transition-all shrink-0 ${
-                        tool === 'measure' ? 'bg-red-600 text-white font-bold shadow-md' : 'text-slate-300 hover:bg-slate-800'
-                      }`}
-                    >
-                      <Ruler className="w-4 h-4 text-amber-400" />
-                      <span>Medir</span>
-                    </button>
-
-                    <div className="w-px h-5 bg-slate-700/80 mx-1 shrink-0" />
-
-                    {/* BUSCAR WMS */}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowActionBar(false);
-                        setModal('search');
-                      }}
-                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-slate-300 hover:bg-slate-800 transition-all hover:text-white shrink-0"
-                    >
-                      <Search className="w-4 h-4 text-orange-400" />
-                      <span>Buscar WMS</span>
-                    </button>
-
-                    {/* MAIS / CONFIGURAÇÕES */}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowActionBar(false);
-                        setMobileMenuOpen(true);
-                      }}
-                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-slate-300 hover:bg-slate-800 transition-all hover:text-white shrink-0"
-                    >
-                      <SlidersHorizontal className="w-4 h-4 text-sky-400" />
-                      <span>Mais</span>
-                    </button>
-                  </div>
-                )}
-
-                {/* BOTÃO FLUTUANTE FAB '+' APENAS COM O ÍCONE '+' */}
-                <button
-                  type="button"
-                  onClick={() => setShowActionBar((prev) => !prev)}
-                  className={`w-12 h-12 rounded-full shadow-2xl transition-all flex items-center justify-center border ${
-                    showActionBar
-                      ? 'bg-slate-800 border-slate-600 text-slate-200 shadow-slate-900/80 scale-105'
-                      : 'bg-red-600 hover:bg-red-500 border-red-400 text-white shadow-red-600/40 hover:scale-110'
-                  }`}
-                  title={showActionBar ? 'Fechar Ações' : 'Ações e Ferramentas (+)'}
-                >
-                  <Plus className={`w-6 h-6 stroke-[3] transition-transform duration-200 ${showActionBar ? 'rotate-45' : ''}`} />
-                </button>
-              </div>
+              {/* DOCK FLUTUANTE INFERIOR MODERNO 3.0 (FERRAMENTAS CAD & WMS) */}
+              <FloatingActionDock
+                tool={tool}
+                onSelectTool={(t) => {
+                  setTool(t);
+                  setMeasureLine(null);
+                  if (t === 'select') setToast('Modo Seleção Ativado');
+                  else if (t === 'move') setToast('Modo Mover Ativado');
+                  else if (t === 'pan') setToast('Modo Navegar no Mapa');
+                  else if (t === 'rectangle') setToast('Modo Nova Zona: Arraste na planta');
+                  else if (t === 'corridor') setToast('Modo Corredores: Clique no mapa');
+                  else if (t === 'measure') setToast('Fita Métrica: Clique em dois pontos');
+                }}
+                snapEnabled={snapEnabled}
+                onToggleSnap={() => {
+                  setSnapEnabled((prev) => !prev);
+                  setToast(!snapEnabled ? 'Magnetismo / Snap Ativado' : 'Movimento Livre sem Snap');
+                }}
+                physicsEnabled={physicsEnabled}
+                onTogglePhysics={() => {
+                  setPhysicsEnabled((prev) => !prev);
+                  setToast(!physicsEnabled ? 'Física Anti-Sobreposição Ativada' : 'Física Desativada');
+                }}
+                multiSelectMode={isMultiSelectMode}
+                onToggleMultiSelect={() => {
+                  setIsMultiSelectMode((prev) => !prev);
+                  setToast(!isMultiSelectMode ? 'Modo Seleção Múltipla Ativado' : 'Modo Seleção Individual');
+                }}
+                canUndo={history.length > 0}
+                onUndo={undo}
+                canRedo={future.length > 0}
+                onRedo={redo}
+                isDark={isDark}
+                onOpenSpotlight={() => setModal('spotlight')}
+              />
 
               {/* MINIMAPA FIXO NA PARTE SUPERIOR (ACOMPANHA NAVEGAÇÃO E ZOOM SEM ATRAPALHAR) */}
               <div className="absolute top-3 right-3 z-20 flex flex-col items-end">
@@ -3007,29 +2891,6 @@ export default function Editor() {
                   defaultCollapsed={typeof window !== 'undefined' ? window.innerWidth < 768 : false}
                 />
               </div>
-
-              {/* BOTÃO FLUTUANTE DE BUSCA COM LUPA (SUGESTÃO DO USUÁRIO) */}
-              <button
-                type="button"
-                onClick={() => setModal('search')}
-                className="absolute bottom-5 left-4 z-20 flex items-center gap-2 px-3 py-2 sm:px-3.5 sm:py-2.5 rounded-full bg-slate-900/95 hover:bg-slate-800 text-slate-100 border border-orange-500/80 hover:border-orange-400 shadow-2xl backdrop-blur-md transition-all group hover:scale-105 cursor-pointer select-none"
-                title="Buscar Código WMS, Zona ou SKU (Ctrl+K)"
-              >
-                <div className="w-6 h-6 rounded-full bg-orange-600 flex items-center justify-center text-white shadow-md shadow-orange-600/40 group-hover:bg-orange-500 transition-colors shrink-0">
-                  <Search className="w-3.5 h-3.5" />
-                </div>
-                <div className="flex flex-col text-left">
-                  <span className="text-xs font-bold leading-tight flex items-center gap-1.5">
-                    <span>Buscar WMS</span>
-                    <span className="hidden sm:inline-block font-mono text-[9px] px-1 py-0.2 rounded bg-slate-800 text-orange-400 border border-slate-700">
-                      Ctrl+K
-                    </span>
-                  </span>
-                  <span className="text-[10px] text-slate-400 leading-tight hidden xs:inline">
-                    Código, SKU ou Zona
-                  </span>
-                </div>
-              </button>
 
               {/* BOTÃO FLUTUANTE DE LEGENDA RÁPIDA (SEM MENU SPLIT) */}
               <div className="absolute bottom-5 right-4 z-20">
@@ -3064,23 +2925,41 @@ export default function Editor() {
               <button
                 type="button"
                 onClick={() => setDesktopSidebarOpen(true)}
-                className="hidden md:flex absolute top-4 right-4 z-20 items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-900/90 hover:bg-slate-850 border border-slate-700 shadow-xl backdrop-blur-md text-xs font-semibold text-slate-200 transition-all"
+                className={`hidden md:flex absolute top-4 right-4 z-20 items-center gap-2 px-3 py-2 rounded-xl border shadow-2xl backdrop-blur-md text-xs font-semibold transition-all hover:scale-105 cursor-pointer ${
+                  isDark
+                    ? 'bg-slate-900/95 hover:bg-slate-850 border-slate-700/80 text-slate-100 shadow-slate-950/80'
+                    : 'bg-white/95 hover:bg-slate-50 border-slate-300 text-slate-800 shadow-slate-300/40'
+                }`}
+                title="Abrir painel de propriedades"
               >
-                <PanelRightOpen className="w-4 h-4 text-orange-400" />
+                <PanelRightOpen className="w-4 h-4 text-orange-500" />
                 <span>Propriedades: {selected.name}</span>
               </button>
             )}
 
-            {/* DESKTOP SIDEBAR (MD+) */}
+            {/* DESKTOP SIDEBAR (MD+) RETRÁTIL */}
             <aside
               onPointerDown={(e) => e.stopPropagation()}
               onTouchStart={(e) => e.stopPropagation()}
-              className={`hidden md:flex w-80 shrink-0 border-l p-4 flex-col justify-between z-10 overflow-y-auto transition-all duration-200 ${
-                isDark ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'
+              className={`hidden md:flex w-84 shrink-0 border-l p-4 flex-col justify-between z-10 overflow-y-auto transition-all duration-200 relative ${
+                isDark ? 'bg-slate-900/95 border-slate-800 text-slate-100' : 'bg-white/95 border-slate-200 text-slate-900 shadow-xl'
               } ${isDragging ? 'opacity-25 pointer-events-none scale-[0.99]' : 'opacity-100'} ${
                 !desktopSidebarOpen || freeMoveMode ? '!hidden' : ''
               }`}
             >
+              {/* Botão de recolhimento na borda do painel */}
+              <button
+                type="button"
+                onClick={() => setDesktopSidebarOpen(false)}
+                className={`hidden md:flex absolute -left-3.5 top-5 z-20 w-7 h-7 rounded-full border shadow-md items-center justify-center transition-all hover:scale-110 cursor-pointer ${
+                  isDark
+                    ? 'bg-slate-800 border-slate-600 text-slate-300 hover:text-white'
+                    : 'bg-white border-slate-300 text-slate-600 hover:text-slate-900'
+                }`}
+                title="Recolher painel de propriedades para liberar tela inteira"
+              >
+                <ChevronRight className="w-4 h-4" />
+              </button>
               <div className="space-y-4">
                 {/* Banner de Seleção Múltipla & Operações de Grupo */}
                 {selectedIds.length > 1 && (
@@ -3328,7 +3207,7 @@ export default function Editor() {
                     <label className="block text-[10px] text-slate-400 mb-0.5">Porte / Tamanho do Volume</label>
                     <select
                       disabled={selected.locked}
-                      value={selected.productSize || 'medium_box'}
+                      value={selected.productSize || 'pallet'}
                       onChange={(e) => handleUpdateZoneVolumeType(e.target.value as ProductSize, selected.category)}
                       className="w-full px-2.5 py-1.5 text-xs font-semibold rounded-md border border-slate-700 bg-slate-950 text-slate-200 disabled:opacity-50"
                     >
@@ -3346,7 +3225,7 @@ export default function Editor() {
                     <select
                       disabled={selected.locked}
                       value={selected.category || 'general'}
-                      onChange={(e) => handleUpdateZoneVolumeType(selected.productSize || 'medium_box', e.target.value)}
+                      onChange={(e) => handleUpdateZoneVolumeType(selected.productSize || 'pallet', e.target.value)}
                       className="w-full px-2.5 py-1.5 text-xs font-semibold rounded-md border border-slate-700 bg-slate-950 text-slate-200 disabled:opacity-50"
                     >
                       {PRODUCT_CATEGORIES.map((cat) => (
@@ -4514,6 +4393,18 @@ export default function Editor() {
                     <span>Importar JSON</span>
                   </button>
                 </div>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMobileMenuOpen(false);
+                    setModal('png-export');
+                  }}
+                  className="w-full flex items-center justify-center gap-2 p-2.5 rounded-xl bg-orange-600 hover:bg-orange-500 text-white font-bold shadow-md shadow-orange-950/40 mt-1"
+                >
+                  <CameraIcon className="w-4 h-4" />
+                  <span>Exportar Imagem PNG em Alta Resolução</span>
+                </button>
               </div>
             </div>
           </div>
@@ -4521,6 +4412,18 @@ export default function Editor() {
       )}
 
       {/* MODAIS DO SISTEMA */}
+
+      {/* MODAL: EXPORTAR IMAGEM PNG EM ALTA RESOLUÇÃO */}
+      <PngExportDialog
+        isOpen={modal === 'png-export'}
+        onClose={() => setModal(null)}
+        area={activeArea}
+        bounds={bounds}
+        scaleRatio={scaleRatio}
+        camera={camera}
+        canvasSize={canvasSize}
+        isDark={isDark}
+      />
 
       {/* MODAL: REDIMENSIONAR TAMANHO DO ESPAÇO */}
       <WarehouseSizeDialog
@@ -4558,6 +4461,24 @@ export default function Editor() {
         areas={areas}
         activeAreaId={activeId}
         onNavigateToResult={handleNavigateToSearchResult}
+        isDark={isDark}
+      />
+
+      {/* MODAL: SPOTLIGHT COMMAND PALETTE 3.0 (CTRL+K) */}
+      <SpotlightPalette
+        isOpen={modal === 'spotlight'}
+        onClose={() => setModal(null)}
+        areas={areas}
+        activeAreaId={activeId}
+        isDark={isDark}
+        onNavigateToPosition={handleSpotlightNavigate}
+        onExecuteAction={handleSpotlightAction}
+      />
+
+      {/* MODAL: ATALHOS DE TECLADO 3.0 */}
+      <KeyboardShortcutsDialog
+        isOpen={modal === 'shortcuts'}
+        onClose={() => setModal(null)}
         isDark={isDark}
       />
 

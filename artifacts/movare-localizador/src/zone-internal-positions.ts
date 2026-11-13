@@ -5,11 +5,14 @@
 
 export type InternalLayoutMethod = 'horizontal_rows' | 'dimensioned_units' | 'grid' | 'custom';
 
+import type { ProductSize } from './warehouse-constants';
+
 export type PositionStockStatus = 'empty' | 'occupied' | 'reserved';
 
 export type InternalPosition = {
   id: string; // Identificador estável (ex: "pos-0001-xyz")
   code: string; // Código de localização WMS editável (ex: "P0001", "P0002")
+  label?: string;
   relX: number; // Coordenada X relativa ao canto superior esquerdo da zona (px)
   relY: number; // Coordenada Y relativa ao canto superior esquerdo da zona (px)
   relWidth: number; // Largura relativa da posição (px)
@@ -24,6 +27,12 @@ export type InternalPosition = {
   unit?: string; // 'UN' | 'CX' | 'PALETE'
   status: PositionStockStatus;
   updatedAt?: string;
+  notes?: string;
+  // Metadados adicionais opcionais
+  productSize?: ProductSize;
+  category?: string;
+  shelfIndex?: number;
+  cellIndex?: number;
 };
 
 export type ZoneInternalLayout = {
@@ -310,30 +319,28 @@ export function calculateZoneInternalPositions(
     rows: customLayout?.rows,
   };
 
-  const positions: InternalPosition[] = [];
-  const existingMap = new Map<string, InternalPosition>();
-  const existingList = existingPositions || [];
-  existingList.forEach((pos, idx) => {
-    existingMap.set(pos.id, pos);
-    // mapear também por índice para reaproveitamento
-    existingMap.set(`idx-${idx}`, pos);
-  });
+  const rawPositions: {
+    id: string;
+    code: string;
+    label?: string;
+    relX: number;
+    relY: number;
+    relWidth: number;
+    relHeight: number;
+    widthMeters: number;
+    depthMeters: number;
+  }[] = [];
 
   const prefix = layout.codePrefix || 'P';
 
   if (layout.method === 'horizontal_rows') {
-    // -------------------------------------------------------------
     // MÉTODO A: FILEIRAS HORIZONTAIS DE LARGURA TOTAL
-    // Usado para móveis desmontados (flat_pack_furniture)
-    // Cada posição ocupa toda a largura útil da zona.
-    // -------------------------------------------------------------
-    const marginPx = Math.max(2, Math.round((layout.marginMeters ?? 0.10) * safeScale));
-    const usefulWidthPx = Math.max(20, zone.width - marginPx * 2);
-    const usefulHeightPx = Math.max(20, zone.height - marginPx * 2);
+    const marginPx = Math.max(0, Math.round((layout.marginMeters ?? 0.10) * safeScale));
+    const usefulWidthPx = Math.max(4, zone.width - marginPx * 2);
+    const usefulHeightPx = Math.max(4, zone.height - marginPx * 2);
 
-    const rowDepthMeters = Math.max(0.3, layout.rowDepthMeters ?? 0.80);
-    const rowDepthPx = Math.max(12, Math.round(rowDepthMeters * safeScale));
-
+    const rowDepthMeters = Math.max(0.2, layout.rowDepthMeters ?? 0.80);
+    const rowDepthPx = Math.max(8, Math.round(rowDepthMeters * safeScale));
     const rowCount = Math.max(1, Math.floor(usefulHeightPx / rowDepthPx));
 
     for (let i = 0; i < rowCount; i++) {
@@ -344,55 +351,32 @@ export function calculateZoneInternalPositions(
       const currentIndex = i + 1;
       const stableId = generateStablePositionId(zone.id, currentIndex);
 
-      // Reutiliza dados existentes se houver, removendo da fila para evitar duplicidade
-      let existing = existingMap.get(stableId);
-      if (existing) {
-        existingMap.delete(stableId);
-      } else {
-        existing = existingMap.get(`idx-${i}`);
-        if (existing) {
-          existingMap.delete(`idx-${i}`);
-          existingMap.delete(existing.id);
-        }
-      }
-
-      positions.push({
+      rawPositions.push({
         id: stableId,
-        code: existing?.code || formatPositionCode(prefix, currentIndex),
+        code: formatPositionCode(prefix, currentIndex),
         relX,
         relY,
         relWidth,
         relHeight,
         widthMeters: Number((relWidth / safeScale).toFixed(2)),
         depthMeters: Number((relHeight / safeScale).toFixed(2)),
-        sku: existing?.sku,
-        description: existing?.description,
-        quantity: existing?.quantity,
-        unit: existing?.unit || profile.defaultUnit,
-        status: existing?.status || 'empty',
-        updatedAt: existing?.updatedAt || new Date().toISOString(),
       });
     }
   } else if (layout.method === 'dimensioned_units' || layout.method === 'grid') {
-    // -------------------------------------------------------------
     // MÉTODO B & C: POSIÇÕES DIMENSIONADAS / GRADE PADRÃO
-    // Método B: eletrodomésticos com folgas operacionais
-    // Método C: grade em linhas e colunas
-    // -------------------------------------------------------------
-    const marginPx = Math.max(2, Math.round((layout.marginMeters ?? 0.10) * safeScale));
+    const marginPx = Math.max(0, Math.round((layout.marginMeters ?? 0.10) * safeScale));
     const clearancePx = Math.max(0, Math.round((layout.clearanceMeters ?? 0.10) * safeScale));
-    const unitWidthMeters = Math.max(0.4, layout.unitWidthMeters ?? profile.unitWidthMeters ?? 1.0);
-    const unitDepthMeters = Math.max(0.4, layout.unitDepthMeters ?? profile.unitDepthMeters ?? 1.0);
+    const unitWidthMeters = Math.max(0.2, layout.unitWidthMeters ?? profile.unitWidthMeters ?? 1.0);
+    const unitDepthMeters = Math.max(0.2, layout.unitDepthMeters ?? profile.unitDepthMeters ?? 1.0);
 
-    const unitWPx = Math.max(16, Math.round(unitWidthMeters * safeScale));
-    const unitHPx = Math.max(16, Math.round(unitDepthMeters * safeScale));
+    const unitWPx = Math.max(8, Math.round(unitWidthMeters * safeScale));
+    const unitHPx = Math.max(8, Math.round(unitDepthMeters * safeScale));
 
     const availableWidthPx = Math.max(unitWPx, zone.width - marginPx * 2);
     const availableHeightPx = Math.max(unitHPx, zone.height - marginPx * 2);
 
     const cols = Math.max(1, Math.floor((availableWidthPx + clearancePx) / (unitWPx + clearancePx)));
     const rows = Math.max(1, Math.floor((availableHeightPx + clearancePx) / (unitHPx + clearancePx)));
-
     const sameCodePerRow = layout.sameCodePerRow ?? profile.sameCodePerRow ?? false;
 
     let currentIndex = 0;
@@ -402,102 +386,138 @@ export function calculateZoneInternalPositions(
         currentIndex++;
         const relX = marginPx + c * (unitWPx + clearancePx);
         const relY = marginPx + r * (unitHPx + clearancePx);
-        const relWidth = unitWPx;
-        const relHeight = unitHPx;
         const stableId = generateStablePositionId(zone.id, currentIndex);
-
-        let existing = existingMap.get(stableId);
-        if (existing) {
-          existingMap.delete(stableId);
-        } else {
-          existing = existingMap.get(`idx-${currentIndex - 1}`);
-          if (existing) {
-            existingMap.delete(`idx-${currentIndex - 1}`);
-            existingMap.delete(existing.id);
-          }
-        }
         const autoCode = sameCodePerRow ? lineCode : formatPositionCode(prefix, currentIndex);
 
-        positions.push({
+        rawPositions.push({
           id: stableId,
-          code: existing?.code || autoCode,
-          label: existing?.label || (sameCodePerRow && cols > 1 ? `Posição ${c + 1} de ${cols}` : undefined),
+          code: autoCode,
+          label: sameCodePerRow && cols > 1 ? `Posição ${c + 1} de ${cols}` : undefined,
           relX,
           relY,
-          relWidth,
-          relHeight,
-          widthMeters: Number((relWidth / safeScale).toFixed(2)),
-          depthMeters: Number((relHeight / safeScale).toFixed(2)),
-          sku: existing?.sku,
-          description: existing?.description,
-          quantity: existing?.quantity,
-          unit: existing?.unit || profile.defaultUnit,
-          status: existing?.status || 'empty',
-          updatedAt: existing?.updatedAt || new Date().toISOString(),
+          relWidth: unitWPx,
+          relHeight: unitHPx,
+          widthMeters: Number((unitWPx / safeScale).toFixed(2)),
+          depthMeters: Number((unitHPx / safeScale).toFixed(2)),
         });
       }
     }
   } else if (layout.method === 'custom') {
-    // -------------------------------------------------------------
     // MÉTODO D: LAYOUT PERSONALIZADO
-    // Divisão manual em número exato de colunas e linhas
-    // -------------------------------------------------------------
+    // Divisão manual em número exato de colunas e linhas com contenção estrita
     const cols = Math.max(1, layout.columns || 2);
     const rows = Math.max(1, layout.rows || 2);
-    const marginPx = Math.max(2, Math.round((layout.marginMeters ?? 0.10) * safeScale));
+    const marginPx = Math.max(0, Math.round((layout.marginMeters ?? 0.10) * safeScale));
     const clearancePx = Math.max(0, Math.round((layout.clearanceMeters ?? 0.05) * safeScale));
 
-    const usefulWidth = zone.width - marginPx * 2 - (cols - 1) * clearancePx;
-    const usefulHeight = zone.height - marginPx * 2 - (rows - 1) * clearancePx;
+    // Folga e margem adaptativas para garantir que as células caibam estritamente no polígono
+    const maxClearanceW = cols > 1 ? Math.floor((zone.width * 0.4) / (cols - 1)) : 0;
+    const maxClearanceH = rows > 1 ? Math.floor((zone.height * 0.4) / (rows - 1)) : 0;
+    const safeClearanceW = Math.min(clearancePx, maxClearanceW);
+    const safeClearanceH = Math.min(clearancePx, maxClearanceH);
 
-    const cellW = Math.max(16, usefulWidth / cols);
-    const cellH = Math.max(16, usefulHeight / rows);
+    const maxMarginW = Math.floor(zone.width * 0.2);
+    const maxMarginH = Math.floor(zone.height * 0.2);
+    const safeMarginW = Math.min(marginPx, maxMarginW);
+    const safeMarginH = Math.min(marginPx, maxMarginH);
+
+    const usefulWidth = Math.max(cols * 4, zone.width - safeMarginW * 2 - (cols - 1) * safeClearanceW);
+    const usefulHeight = Math.max(rows * 4, zone.height - safeMarginH * 2 - (rows - 1) * safeClearanceH);
+
+    const cellW = usefulWidth / cols;
+    const cellH = usefulHeight / rows;
 
     let currentIndex = 0;
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
         currentIndex++;
-        const relX = marginPx + c * (cellW + clearancePx);
-        const relY = marginPx + r * (cellH + clearancePx);
+        const relX = safeMarginW + c * (cellW + safeClearanceW);
+        const relY = safeMarginH + r * (cellH + safeClearanceH);
         const stableId = generateStablePositionId(zone.id, currentIndex);
 
-        let existing = existingMap.get(stableId);
-        if (existing) {
-          existingMap.delete(stableId);
-        } else {
-          existing = existingMap.get(`idx-${currentIndex - 1}`);
-          if (existing) {
-            existingMap.delete(`idx-${currentIndex - 1}`);
-            existingMap.delete(existing.id);
-          }
-        }
-
-        positions.push({
+        rawPositions.push({
           id: stableId,
-          code: existing?.code || formatPositionCode(prefix, currentIndex),
+          code: formatPositionCode(prefix, currentIndex),
           relX,
           relY,
           relWidth: cellW,
           relHeight: cellH,
           widthMeters: Number((cellW / safeScale).toFixed(2)),
           depthMeters: Number((cellH / safeScale).toFixed(2)),
-          sku: existing?.sku,
-          description: existing?.description,
-          quantity: existing?.quantity,
-          unit: existing?.unit || profile.defaultUnit,
-          status: existing?.status || 'empty',
-          updatedAt: existing?.updatedAt || new Date().toISOString(),
         });
       }
     }
   }
 
-  return sanitizeZonePositions(zone.id, positions);
+  // -------------------------------------------------------------
+  // MAPEAMENTO DETERMINÍSTICO E PRESERVAÇÃO DE DADOS EXISTENTES
+  // -------------------------------------------------------------
+  const existingList = Array.isArray(existingPositions) ? [...existingPositions] : [];
+  const assignedExistingIds = new Set<string>();
+
+  const finalPositions: InternalPosition[] = rawPositions.map((rawPos, idx) => {
+    // 1. Tenta correspondência por ID estável
+    let matched = existingList.find((p) => p.id === rawPos.id && !assignedExistingIds.has(p.id));
+
+    // 2. Se não encontrou por ID, tenta por proximidade geométrica de centro
+    if (!matched && existingList.length > 0) {
+      const rawCenterX = rawPos.relX + rawPos.relWidth / 2;
+      const rawCenterY = rawPos.relY + rawPos.relHeight / 2;
+
+      let closest: InternalPosition | null = null;
+      let minDistance = Infinity;
+
+      for (const p of existingList) {
+        if (assignedExistingIds.has(p.id)) continue;
+        const pCenterX = p.relX + p.relWidth / 2;
+        const pCenterY = p.relY + p.relHeight / 2;
+        const dist = Math.hypot(pCenterX - rawCenterX, pCenterY - rawCenterY);
+        if (dist < minDistance) {
+          minDistance = dist;
+          closest = p;
+        }
+      }
+
+      // Se a distância for razoável ou se for a mesma ordem de índice
+      if (closest) {
+        matched = closest;
+      }
+    }
+
+    // 3. Fallback para índice se ainda não associado
+    if (!matched && existingList[idx] && !assignedExistingIds.has(existingList[idx].id)) {
+      matched = existingList[idx];
+    }
+
+    if (matched) {
+      assignedExistingIds.add(matched.id);
+    }
+
+    return {
+      id: rawPos.id,
+      code: matched?.code || rawPos.code,
+      label: rawPos.label || matched?.label,
+      relX: rawPos.relX,
+      relY: rawPos.relY,
+      relWidth: rawPos.relWidth,
+      relHeight: rawPos.relHeight,
+      widthMeters: rawPos.widthMeters,
+      depthMeters: rawPos.depthMeters,
+      sku: matched?.sku,
+      description: matched?.description,
+      quantity: matched?.quantity,
+      unit: matched?.unit || profile.defaultUnit,
+      status: matched?.status || (matched?.sku ? 'occupied' : 'empty'),
+      updatedAt: matched?.updatedAt || new Date().toISOString(),
+      notes: matched?.notes,
+    };
+  });
+
+  return sanitizeZonePositions(zone.id, finalPositions);
 }
 
 // -------------------------------------------------------------
 // VERIFICAÇÃO DE ESPAÇO E REDIMENSIONAMENTO SEGURO
-// Informa o usuário caso posições com estoque sofram corte
 // -------------------------------------------------------------
 export type ResizeRecalculationResult = {
   positions: InternalPosition[];
@@ -505,10 +525,11 @@ export type ResizeRecalculationResult = {
   overflowOccupiedPositions: InternalPosition[];
   totalPreviousPositions: number;
   totalNewPositions: number;
+  relocatedOccupiedCount: number;
 };
 
 export function recalculatePositionsOnZoneResize(
-  zone: { id: string; width: number; height: number; category?: string },
+  zone: { id: string; width: number; height: number; category?: string; overflowPositions?: InternalPosition[] },
   scaleRatio: number,
   layout: ZoneInternalLayout | undefined,
   currentPositions: InternalPosition[]
@@ -516,16 +537,57 @@ export function recalculatePositionsOnZoneResize(
   const safeScale = Number.isFinite(scaleRatio) && scaleRatio > 0 ? scaleRatio : 25;
   const newPositions = calculateZoneInternalPositions(zone, safeScale, layout, currentPositions);
 
-  const newCount = newPositions.length;
   const prevCount = currentPositions.length;
+  const newCount = newPositions.length;
 
+  // Identifica todas as posições anteriores que tinham estoque
+  const occupiedPrevious = currentPositions.filter(
+    (p) => p.status !== 'empty' || (p.sku && p.sku.trim().length > 0) || (p.quantity && p.quantity > 0)
+  );
+
+  // Mapeia quais posições com estoque já estão nas novas posições
+  const newOccupiedSkus = new Set<string>();
+  newPositions.forEach((p) => {
+    if (p.sku) newOccupiedSkus.add(p.sku);
+  });
+
+  const unassignedOccupied: InternalPosition[] = [];
+  for (const prev of occupiedPrevious) {
+    const isPresent = newPositions.some((np) => np.sku === prev.sku && prev.sku);
+    if (!isPresent) {
+      unassignedOccupied.push(prev);
+    }
+  }
+
+  // Tenta realocar automaticamente itens não associados nas posições vagas da nova geometria
+  let relocatedCount = 0;
   const overflowOccupiedPositions: InternalPosition[] = [];
 
-  if (prevCount > newCount) {
-    const dropped = currentPositions.slice(newCount);
-    for (const p of dropped) {
-      if (p.status !== 'empty' || (p.sku && p.sku.trim().length > 0) || (p.quantity && p.quantity > 0)) {
-        overflowOccupiedPositions.push(p);
+  for (const unassigned of unassignedOccupied) {
+    const emptySlot = newPositions.find((np) => np.status === 'empty' && !np.sku);
+    if (emptySlot) {
+      emptySlot.sku = unassigned.sku;
+      emptySlot.description = unassigned.description;
+      emptySlot.quantity = unassigned.quantity;
+      emptySlot.unit = unassigned.unit;
+      emptySlot.status = unassigned.status || 'occupied';
+      emptySlot.updatedAt = new Date().toISOString();
+      emptySlot.notes = unassigned.notes;
+      relocatedCount++;
+    } else {
+      // Não cabe: armazena como overflow com segurança
+      overflowOccupiedPositions.push({
+        ...unassigned,
+        notes: unassigned.notes || 'Retido em overflow por redução de espaço da zona',
+      });
+    }
+  }
+
+  // Se já havia overflow anterior na zona, mantém com segurança
+  if (Array.isArray(zone.overflowPositions)) {
+    for (const prevOvf of zone.overflowPositions) {
+      if (!overflowOccupiedPositions.some((o) => o.id === prevOvf.id)) {
+        overflowOccupiedPositions.push(prevOvf);
       }
     }
   }
@@ -536,12 +598,143 @@ export function recalculatePositionsOnZoneResize(
     overflowOccupiedPositions,
     totalPreviousPositions: prevCount,
     totalNewPositions: newCount,
+    relocatedOccupiedCount: relocatedCount,
   };
 }
 
 // -------------------------------------------------------------
+// MIGRAÇÃO SEGURA AO TROCAR DE PRESET DE PORTE DE VOLUME
+// -------------------------------------------------------------
+export type PresetMigrationReport = {
+  previousCount: number;
+  newCount: number;
+  occupiedPreservedCount: number;
+  overflowCount: number;
+  overflowPositions: InternalPosition[];
+  relocatedDetails: { sku: string; fromCode: string; toCode: string }[];
+};
+
+export function migratePositionsOnPresetChange(
+  element: any,
+  presetId: string,
+  scaleRatio: number
+): {
+  updatedElement: any;
+  migrationReport: PresetMigrationReport;
+} {
+  const profile = getCategoryProfile(presetId);
+  const safeScale = Number.isFinite(scaleRatio) && scaleRatio > 0 ? scaleRatio : 25;
+
+  const layout: ZoneInternalLayout = {
+    method: profile.defaultMethod,
+    rowDepthMeters: profile.rowDepthMeters,
+    unitWidthMeters: profile.unitWidthMeters,
+    unitDepthMeters: profile.unitDepthMeters,
+    clearanceMeters: profile.clearanceMeters,
+    marginMeters: profile.marginMeters,
+    codePrefix: profile.codePrefix,
+    sameCodePerRow: profile.sameCodePerRow,
+  };
+
+  const oldPositions = Array.isArray(element.internalPositions) ? [...element.internalPositions] : [];
+  const oldOccupied = oldPositions.filter(
+    (p) => p.status !== 'empty' || (p.sku && p.sku.trim().length > 0) || (p.quantity && p.quantity > 0)
+  );
+
+  // Calcula novas posições preservando dados existentes
+  const newPositions = calculateZoneInternalPositions(
+    {
+      id: element.id,
+      width: element.width,
+      height: element.height,
+      category: profile.category,
+    },
+    safeScale,
+    layout,
+    oldPositions
+  );
+
+  // Verifica se todos os itens ocupados foram acomodados
+  const relocatedDetails: { sku: string; fromCode: string; toCode: string }[] = [];
+  const overflowPositions: InternalPosition[] = [];
+
+  for (const occ of oldOccupied) {
+    const target = newPositions.find((np) => np.sku === occ.sku && occ.sku);
+    if (target) {
+      relocatedDetails.push({
+        sku: occ.sku || 'Sem SKU',
+        fromCode: occ.code,
+        toCode: target.code,
+      });
+    } else {
+      // Tenta encaixar em vaga vazia
+      const emptySlot = newPositions.find((np) => np.status === 'empty' && !np.sku);
+      if (emptySlot) {
+        emptySlot.sku = occ.sku;
+        emptySlot.description = occ.description;
+        emptySlot.quantity = occ.quantity;
+        emptySlot.unit = occ.unit;
+        emptySlot.status = occ.status || 'occupied';
+        emptySlot.updatedAt = new Date().toISOString();
+        emptySlot.notes = occ.notes;
+        relocatedDetails.push({
+          sku: occ.sku || 'Sem SKU',
+          fromCode: occ.code,
+          toCode: emptySlot.code,
+        });
+      } else {
+        overflowPositions.push({
+          ...occ,
+          notes: `Retido por mudança de preset para "${profile.label}"`,
+        });
+      }
+    }
+  }
+
+  // Preserva overflow anterior se existir
+  if (Array.isArray(element.overflowPositions)) {
+    for (const op of element.overflowPositions) {
+      if (!overflowPositions.some((o) => o.id === op.id)) {
+        overflowPositions.push(op);
+      }
+    }
+  }
+
+  const updatedElement = {
+    ...element,
+    productSize: presetId,
+    category: profile.category,
+    internalLayout: layout,
+    internalPositions: newPositions,
+    overflowPositions: overflowPositions.length > 0 ? overflowPositions : undefined,
+  };
+
+  const migrationReport: PresetMigrationReport = {
+    previousCount: oldPositions.length,
+    newCount: newPositions.length,
+    occupiedPreservedCount: oldOccupied.length - overflowPositions.length,
+    overflowCount: overflowPositions.length,
+    overflowPositions,
+    relocatedDetails,
+  };
+
+  return {
+    updatedElement,
+    migrationReport,
+  };
+}
+
+export function applyVolumePresetToZone(
+  element: any,
+  presetId: string,
+  scaleRatio: number
+): any {
+  const result = migratePositionsOnPresetChange(element, presetId, scaleRatio);
+  return result.updatedElement;
+}
+
+// -------------------------------------------------------------
 // CRIAR ZONA COM POSIÇÕES INTERNAS INICIAIS
-// Usado na inserção de zonas prontas temáticas
 // -------------------------------------------------------------
 export function createZoneWithInternalLayout(params: {
   zoneId: string;
@@ -579,7 +772,6 @@ export function createZoneWithInternalLayout(params: {
     layout
   );
 
-  // Se houver amostra de SKU, povoar a primeira ou segunda posição com dados de exemplo
   if (params.sampleSku && positions.length > 0) {
     positions[0] = {
       ...positions[0],
@@ -597,47 +789,3 @@ export function createZoneWithInternalLayout(params: {
     internalPositions: positions,
   };
 }
-
-// -------------------------------------------------------------
-// APLICAR PRESET DE PORTE DE VOLUME A UMA ZONA
-// Recalcula automaticamente as posições internas para o produto
-// -------------------------------------------------------------
-export function applyVolumePresetToZone(
-  element: any,
-  presetId: string,
-  scaleRatio: number
-): any {
-  const profile = getCategoryProfile(presetId);
-  const safeScale = Number.isFinite(scaleRatio) && scaleRatio > 0 ? scaleRatio : 25;
-
-  const layout: ZoneInternalLayout = {
-    method: profile.defaultMethod,
-    rowDepthMeters: profile.rowDepthMeters,
-    unitWidthMeters: profile.unitWidthMeters,
-    unitDepthMeters: profile.unitDepthMeters,
-    clearanceMeters: profile.clearanceMeters,
-    marginMeters: profile.marginMeters,
-    codePrefix: profile.codePrefix,
-    sameCodePerRow: profile.sameCodePerRow,
-  };
-
-  const newPositions = calculateZoneInternalPositions(
-    {
-      id: element.id,
-      width: element.width,
-      height: element.height,
-      category: profile.category,
-    },
-    safeScale,
-    layout
-  );
-
-  return {
-    ...element,
-    productSize: presetId,
-    category: profile.category,
-    internalLayout: layout,
-    internalPositions: newPositions,
-  };
-}
-

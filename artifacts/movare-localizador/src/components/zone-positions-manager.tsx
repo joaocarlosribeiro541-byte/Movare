@@ -35,6 +35,7 @@ import {
   getCategoryProfile,
   calculateZoneInternalPositions,
   applyVolumePresetToZone,
+  migratePositionsOnPresetChange,
 } from '../zone-internal-positions';
 
 type ZoneInternalPositionsManagerProps = {
@@ -179,18 +180,30 @@ export function ZoneInternalPositionsManager({
   const [customColsDraft, setCustomColsDraft] = useState<number>(currentLayout.columns || 4);
   const [customRowsDraft, setCustomRowsDraft] = useState<number>(currentLayout.rows || 3);
 
-  // Aplicação instantânea de preset de porte com vínculo automático de divisões
+  // Aplicação instantânea de preset de porte com vínculo automático e preservação de estoque
   const handleApplyVolumePreset = (presetId: ProductSize) => {
-    const updated = applyVolumePresetToZone(element, presetId, safeScaleRatio);
-    onUpdateElement(updated);
-    setMethodDraft(updated.internalLayout.method);
-    setRowDepthDraft(updated.internalLayout.rowDepthMeters ?? 0.80);
-    setUnitWidthDraft(updated.internalLayout.unitWidthMeters ?? 0.85);
-    setUnitDepthDraft(updated.internalLayout.unitDepthMeters ?? 0.85);
-    setClearanceDraft(updated.internalLayout.clearanceMeters ?? 0.05);
-    setMarginDraft(updated.internalLayout.marginMeters ?? 0.05);
-    setPrefixDraft(updated.internalLayout.codePrefix || 'GEL');
-    setSameCodePerRowDraft(updated.internalLayout.sameCodePerRow ?? true);
+    const { updatedElement, migrationReport } = migratePositionsOnPresetChange(element, presetId, safeScaleRatio);
+    onUpdateElement(updatedElement);
+    if (updatedElement.internalLayout) {
+      setMethodDraft(updatedElement.internalLayout.method);
+      setRowDepthDraft(updatedElement.internalLayout.rowDepthMeters ?? 0.80);
+      setUnitWidthDraft(updatedElement.internalLayout.unitWidthMeters ?? 0.85);
+      setUnitDepthDraft(updatedElement.internalLayout.unitDepthMeters ?? 0.85);
+      setClearanceDraft(updatedElement.internalLayout.clearanceMeters ?? 0.05);
+      setMarginDraft(updatedElement.internalLayout.marginMeters ?? 0.05);
+      setPrefixDraft(updatedElement.internalLayout.codePrefix || 'GEL');
+      setSameCodePerRowDraft(updatedElement.internalLayout.sameCodePerRow ?? true);
+    }
+
+    if (migrationReport.overflowCount > 0) {
+      setWarningMessage(
+        `Preset aplicado: ${migrationReport.occupiedPreservedCount} itens realocados. ${migrationReport.overflowCount} itens em overflow foram retidos com segurança.`
+      );
+    } else if (migrationReport.occupiedPreservedCount > 0) {
+      setWarningMessage(`Preset aplicado com sucesso! ${migrationReport.occupiedPreservedCount} posições com estoque foram preservadas.`);
+    } else {
+      setWarningMessage(null);
+    }
   };
 
   const [searchTerm, setSearchTerm] = useState('');
@@ -670,6 +683,79 @@ export function ZoneInternalPositionsManager({
                   <span className="w-2 h-2 rounded-full bg-slate-500" />
                   <span>{stats.empty} Livres</span>
                 </span>
+              </div>
+            </div>
+          )}
+
+          {/* EXCEÇÕES / POSIÇÕES EM OVERFLOW PRESERVADAS */}
+          {element.overflowPositions && element.overflowPositions.length > 0 && (
+            <div className="p-3 rounded-xl bg-amber-950/40 border border-amber-600/50 space-y-2 text-xs">
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-amber-200 flex items-center gap-1.5">
+                  <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
+                  <span>Posições em Overflow ({element.overflowPositions.length})</span>
+                </span>
+                <span className="text-[10px] font-mono font-bold text-amber-300 px-1.5 py-0.5 rounded bg-amber-950 border border-amber-700/50">
+                  Retidas com Segurança
+                </span>
+              </div>
+              <p className="text-[10px] text-amber-300/80">
+                Itens com estoque que ultrapassaram a área útil durante redimensionamento ou alteração de preset. Nenhum dado foi perdido.
+              </p>
+              <div className="space-y-1.5 max-h-36 overflow-y-auto pr-1">
+                {element.overflowPositions.map((ovf) => (
+                  <div key={ovf.id} className="p-1.5 rounded bg-slate-950/80 border border-amber-800/40 flex items-center justify-between text-[11px]">
+                    <div>
+                      <div className="font-mono font-bold text-amber-300">{ovf.code} {ovf.sku ? `· ${ovf.sku}` : ''}</div>
+                      <div className="text-[9px] text-slate-400 truncate max-w-[180px]">{ovf.description || ovf.notes || 'Item em estoque'}</div>
+                    </div>
+                    <div className="text-right font-mono text-[10px] text-slate-300">
+                      {ovf.quantity || 1} {ovf.unit || 'UN'}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="flex gap-1.5 pt-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const newPositions = [...positions];
+                    const remainingOvf: InternalPosition[] = [];
+                    for (const ovf of element.overflowPositions || []) {
+                      const empty = newPositions.find((p) => p.status === 'empty' && !p.sku);
+                      if (empty) {
+                        empty.sku = ovf.sku;
+                        empty.description = ovf.description;
+                        empty.quantity = ovf.quantity;
+                        empty.unit = ovf.unit;
+                        empty.status = 'occupied';
+                      } else {
+                        remainingOvf.push(ovf);
+                      }
+                    }
+                    onUpdateElement({
+                      ...element,
+                      internalPositions: newPositions,
+                      overflowPositions: remainingOvf.length > 0 ? remainingOvf : undefined,
+                    });
+                  }}
+                  className="flex-1 py-1.5 px-2 rounded bg-amber-600 hover:bg-amber-500 text-white font-bold text-[10px] transition-colors"
+                >
+                  Realocar em Vagas Livres
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onUpdateElement({
+                      ...element,
+                      overflowPositions: undefined,
+                    });
+                  }}
+                  className="py-1.5 px-2.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] transition-colors"
+                  title="Dispensar lista de overflow"
+                >
+                  Dispensar
+                </button>
               </div>
             </div>
           )}
