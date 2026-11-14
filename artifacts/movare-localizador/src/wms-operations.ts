@@ -19,6 +19,11 @@ export type SearchCatalogItem = {
   quantity?: number;
   unit?: string;
   status?: PositionStockStatus;
+  reservedStore?: string;
+  reservedQuantity?: number;
+  reservedAt?: string;
+  reservedBy?: string;
+  reservedByEmail?: string;
   productSize?: ProductSize;
   category?: string;
   x: number;
@@ -28,9 +33,35 @@ export type SearchCatalogItem = {
   isPosition: boolean;
 };
 
+export type ReservationMetadata = {
+  store?: string;
+  quantity?: number;
+  reservedAt?: string;
+  reservedBy?: string;
+  reservedByEmail?: string;
+};
+
+export function formatReservationDateTime(iso?: string): string {
+  if (!iso || !iso.trim()) return 'Data não registrada';
+  const parsed = new Date(iso);
+  if (Number.isNaN(parsed.getTime())) return 'Data não registrada';
+  try {
+    return new Intl.DateTimeFormat('pt-BR', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    }).format(parsed);
+  } catch {
+    return parsed.toISOString().slice(0, 16).replace('T', ' ');
+  }
+}
+
 /**
  * Alterna o estado de reserva de uma posição interna preservando todos os demais dados WMS.
- * Ao remover uma reserva, restaura 'occupied' se houver SKU/quantidade, ou 'empty' caso contrário.
+ * Ao remover uma reserva, restaura 'occupied' se houver SKU/quantidade, ou 'empty' caso contrário,
+ * limpando os metadados de reserva.
  */
 export function resolveStatusAfterUnreserve(pos: InternalPosition): PositionStockStatus {
   const hasSku = Boolean(pos.sku && pos.sku.trim().length > 0);
@@ -41,10 +72,11 @@ export function resolveStatusAfterUnreserve(pos: InternalPosition): PositionStoc
 export function togglePositionReservationInElement(
   element: DrawingElement,
   positionId: string,
-  nextReserved?: boolean
+  nextReserved?: boolean,
+  reservationMeta?: ReservationMetadata
 ): DrawingElement {
   if (!element.internalPositions?.length) return element;
-  const nowIso = new Date().toISOString();
+  const nowIso = reservationMeta?.reservedAt?.trim() || new Date().toISOString();
   let changed = false;
 
   const updatedPositions = element.internalPositions.map((pos) => {
@@ -53,10 +85,77 @@ export function togglePositionReservationInElement(
     const nextStatus: PositionStockStatus = shouldReserve
       ? 'reserved'
       : resolveStatusAfterUnreserve(pos);
-    if (pos.status === nextStatus) return pos;
+
+    if (nextStatus === 'reserved') {
+      const nextStore = reservationMeta?.store?.trim() || pos.reservedStore;
+      const rawRequestedQty =
+        typeof reservationMeta?.quantity === 'number' &&
+        Number.isFinite(reservationMeta.quantity) &&
+        reservationMeta.quantity > 0
+          ? reservationMeta.quantity
+          : pos.reservedQuantity;
+      const maxStockQty =
+        typeof pos.quantity === 'number' && Number.isFinite(pos.quantity) && pos.quantity > 0
+          ? pos.quantity
+          : undefined;
+      const nextReservedQty =
+        typeof rawRequestedQty === 'number'
+          ? maxStockQty !== undefined
+            ? Math.min(maxStockQty, rawRequestedQty)
+            : rawRequestedQty
+          : maxStockQty;
+      const nextBy = reservationMeta?.reservedBy?.trim() || pos.reservedBy;
+      const nextByEmail = reservationMeta?.reservedByEmail?.trim() || pos.reservedByEmail;
+      const nextAt = pos.status === 'reserved' && !reservationMeta?.reservedAt
+        ? pos.reservedAt || nowIso
+        : nowIso;
+
+      if (
+        pos.status === 'reserved' &&
+        pos.reservedStore === nextStore &&
+        pos.reservedQuantity === nextReservedQty &&
+        pos.reservedBy === nextBy &&
+        pos.reservedByEmail === nextByEmail
+      ) {
+        return pos;
+      }
+
+      changed = true;
+      return {
+        ...pos,
+        status: 'reserved' as PositionStockStatus,
+        reservedStore: nextStore,
+        reservedQuantity: nextReservedQty,
+        reservedAt: nextAt,
+        reservedBy: nextBy,
+        reservedByEmail: nextByEmail,
+        updatedAt: nowIso,
+      };
+    }
+
+    if (
+      pos.status === nextStatus &&
+      !pos.reservedStore &&
+      pos.reservedQuantity === undefined &&
+      !pos.reservedAt &&
+      !pos.reservedBy &&
+      !pos.reservedByEmail
+    ) {
+      return pos;
+    }
+
     changed = true;
+    const {
+      reservedStore: _removedStore,
+      reservedQuantity: _removedReservedQty,
+      reservedAt: _removedAt,
+      reservedBy: _removedBy,
+      reservedByEmail: _removedEmail,
+      ...rest
+    } = pos;
+
     return {
-      ...pos,
+      ...rest,
       status: nextStatus,
       updatedAt: nowIso,
     };
@@ -149,6 +248,11 @@ export function buildSearchCatalog(areas: FloorArea[]): SearchCatalogItem[] {
             quantity: pos.quantity,
             unit: pos.unit || 'UN',
             status: pos.status,
+            reservedStore: pos.status === 'reserved' ? pos.reservedStore : undefined,
+            reservedQuantity: pos.status === 'reserved' ? pos.reservedQuantity : undefined,
+            reservedAt: pos.status === 'reserved' ? pos.reservedAt : undefined,
+            reservedBy: pos.status === 'reserved' ? pos.reservedBy : undefined,
+            reservedByEmail: pos.status === 'reserved' ? pos.reservedByEmail : undefined,
             productSize: pos.productSize || el.productSize,
             category: pos.category || el.category,
             x: el.x + relX,
@@ -233,6 +337,8 @@ export function filterSearchCatalog(
       item.description?.toLowerCase().includes(q) ||
       item.model?.toLowerCase().includes(q) ||
       item.supplier?.toLowerCase().includes(q) ||
+      item.reservedStore?.toLowerCase().includes(q) ||
+      item.reservedBy?.toLowerCase().includes(q) ||
       item.category?.toLowerCase().includes(q)
     );
   });

@@ -645,12 +645,18 @@ REVOKE ALL ON FUNCTION public.save_shared_map(TEXT, JSONB, INTEGER) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.save_shared_map(TEXT, JSONB, INTEGER) TO authenticated;
 
 -- 7. RPC DEDICADA DE RESERVA DE POSIÇÃO (CARGOS COM PERMISSÃO DE RESERVA)
+DROP FUNCTION IF EXISTS public.toggle_position_reservation(TEXT, TEXT, TEXT, TEXT, BOOLEAN);
+DROP FUNCTION IF EXISTS public.toggle_position_reservation(TEXT, TEXT, TEXT, TEXT, BOOLEAN, TEXT, TEXT);
+DROP FUNCTION IF EXISTS public.toggle_position_reservation(TEXT, TEXT, TEXT, TEXT, BOOLEAN, TEXT, TEXT, NUMERIC);
 CREATE OR REPLACE FUNCTION public.toggle_position_reservation(
   p_map_id TEXT,
   p_area_id TEXT,
   p_element_id TEXT,
   p_position_id TEXT,
-  p_reserved BOOLEAN DEFAULT NULL
+  p_reserved BOOLEAN DEFAULT NULL,
+  p_reserved_store TEXT DEFAULT NULL,
+  p_reserved_by TEXT DEFAULT NULL,
+  p_reserved_quantity NUMERIC DEFAULT NULL
 )
 RETURNS JSONB
 LANGUAGE plpgsql
@@ -660,6 +666,11 @@ AS $$
 DECLARE
   v_uid UUID := auth.uid();
   v_email TEXT := auth.jwt() ->> 'email';
+  v_profile_name TEXT;
+  v_resolved_by TEXT;
+  v_resolved_store TEXT := NULLIF(btrim(COALESCE(p_reserved_store, '')), '');
+  v_stock_qty NUMERIC;
+  v_resolved_reserved_qty NUMERIC;
   v_existing public.shared_map%ROWTYPE;
   v_saved public.shared_map%ROWTYPE;
   v_areas JSONB;
@@ -694,6 +705,18 @@ BEGIN
       'error', 'Parâmetros inválidos para atualizar reserva da posição.'
     );
   END IF;
+
+  SELECT NULLIF(btrim(full_name), '')
+    INTO v_profile_name
+    FROM public.user_profiles
+   WHERE user_id = v_uid;
+
+  v_resolved_by := COALESCE(
+    NULLIF(btrim(COALESCE(p_reserved_by, '')), ''),
+    v_profile_name,
+    NULLIF(btrim(COALESCE(v_email, '')), ''),
+    'Operador'
+  );
 
   SELECT *
     INTO v_existing
@@ -736,6 +759,38 @@ BEGIN
 
               v_pos := jsonb_set(v_pos, '{status}', to_jsonb(v_next_status), TRUE);
               v_pos := jsonb_set(v_pos, '{updatedAt}', to_jsonb(v_now_iso), TRUE);
+
+              IF v_next_status = 'reserved' THEN
+                IF v_resolved_store IS NOT NULL THEN
+                  v_pos := jsonb_set(v_pos, '{reservedStore}', to_jsonb(v_resolved_store), TRUE);
+                END IF;
+                v_stock_qty := CASE
+                  WHEN (v_pos ->> 'quantity') ~ '^-?[0-9]+(\.[0-9]+)?$'
+                    THEN (v_pos ->> 'quantity')::NUMERIC
+                  ELSE NULL
+                END;
+                v_resolved_reserved_qty := CASE
+                  WHEN p_reserved_quantity IS NOT NULL AND p_reserved_quantity > 0 THEN
+                    CASE
+                      WHEN v_stock_qty IS NOT NULL AND v_stock_qty > 0
+                        THEN LEAST(v_stock_qty, p_reserved_quantity)
+                      ELSE p_reserved_quantity
+                    END
+                  WHEN v_stock_qty IS NOT NULL AND v_stock_qty > 0 THEN v_stock_qty
+                  ELSE NULL
+                END;
+                IF v_resolved_reserved_qty IS NOT NULL THEN
+                  v_pos := jsonb_set(v_pos, '{reservedQuantity}', to_jsonb(v_resolved_reserved_qty), TRUE);
+                END IF;
+                v_pos := jsonb_set(v_pos, '{reservedAt}', to_jsonb(v_now_iso), TRUE);
+                v_pos := jsonb_set(v_pos, '{reservedBy}', to_jsonb(v_resolved_by), TRUE);
+                IF v_email IS NOT NULL AND btrim(v_email) <> '' THEN
+                  v_pos := jsonb_set(v_pos, '{reservedByEmail}', to_jsonb(v_email), TRUE);
+                END IF;
+              ELSE
+                v_pos := v_pos - 'reservedStore' - 'reservedQuantity' - 'reservedAt' - 'reservedBy' - 'reservedByEmail';
+              END IF;
+
               v_positions := jsonb_set(v_positions, ARRAY[v_pos_idx::TEXT], v_pos, FALSE);
               v_el := jsonb_set(v_el, '{internalPositions}', v_positions, FALSE);
               v_elements := jsonb_set(v_elements, ARRAY[v_el_idx::TEXT], v_el, FALSE);
@@ -781,8 +836,8 @@ BEGIN
 END;
 $$;
 
-REVOKE ALL ON FUNCTION public.toggle_position_reservation(TEXT, TEXT, TEXT, TEXT, BOOLEAN) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.toggle_position_reservation(TEXT, TEXT, TEXT, TEXT, BOOLEAN) TO authenticated;
+REVOKE ALL ON FUNCTION public.toggle_position_reservation(TEXT, TEXT, TEXT, TEXT, BOOLEAN, TEXT, TEXT, NUMERIC) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.toggle_position_reservation(TEXT, TEXT, TEXT, TEXT, BOOLEAN, TEXT, TEXT, NUMERIC) TO authenticated;
 
 -- 8. RPCS DE SINCRONIZAÇÃO DE PERFIL COMUM E GESTÃO DE CARGOS / USUÁRIOS
 DROP FUNCTION IF EXISTS public.sync_my_profile(TEXT);

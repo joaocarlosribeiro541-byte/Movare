@@ -31,6 +31,12 @@ export type InternalPosition = {
   status: PositionStockStatus;
   updatedAt?: string;
   notes?: string;
+  // Metadados detalhados de reserva
+  reservedStore?: string;
+  reservedQuantity?: number;
+  reservedAt?: string;
+  reservedBy?: string;
+  reservedByEmail?: string;
   // Metadados adicionais opcionais
   productSize?: ProductSize;
   category?: string;
@@ -508,11 +514,19 @@ export function calculateZoneInternalPositions(
       depthMeters: rawPos.depthMeters,
       sku: matched?.sku,
       description: matched?.description,
+      model: matched?.model,
+      supplier: matched?.supplier,
+      volumesPerItem: matched?.volumesPerItem,
       quantity: matched?.quantity,
       unit: matched?.unit || profile.defaultUnit,
       status: matched?.status || (matched?.sku ? 'occupied' : 'empty'),
       updatedAt: matched?.updatedAt || new Date().toISOString(),
       notes: matched?.notes,
+      reservedStore: matched?.status === 'reserved' ? matched?.reservedStore : undefined,
+      reservedQuantity: matched?.status === 'reserved' ? matched?.reservedQuantity : undefined,
+      reservedAt: matched?.status === 'reserved' ? matched?.reservedAt : undefined,
+      reservedBy: matched?.status === 'reserved' ? matched?.reservedBy : undefined,
+      reservedByEmail: matched?.status === 'reserved' ? matched?.reservedByEmail : undefined,
     };
   });
 
@@ -571,11 +585,21 @@ export function recalculatePositionsOnZoneResize(
     if (emptySlot) {
       emptySlot.sku = unassigned.sku;
       emptySlot.description = unassigned.description;
+      emptySlot.model = unassigned.model;
+      emptySlot.supplier = unassigned.supplier;
+      emptySlot.volumesPerItem = unassigned.volumesPerItem;
       emptySlot.quantity = unassigned.quantity;
       emptySlot.unit = unassigned.unit;
       emptySlot.status = unassigned.status || 'occupied';
       emptySlot.updatedAt = new Date().toISOString();
       emptySlot.notes = unassigned.notes;
+      if (emptySlot.status === 'reserved') {
+        emptySlot.reservedStore = unassigned.reservedStore;
+        emptySlot.reservedQuantity = unassigned.reservedQuantity;
+        emptySlot.reservedAt = unassigned.reservedAt;
+        emptySlot.reservedBy = unassigned.reservedBy;
+        emptySlot.reservedByEmail = unassigned.reservedByEmail;
+      }
       relocatedCount++;
     } else {
       // Não cabe: armazena como overflow com segurança
@@ -675,11 +699,21 @@ export function migratePositionsOnPresetChange(
       if (emptySlot) {
         emptySlot.sku = occ.sku;
         emptySlot.description = occ.description;
+        emptySlot.model = occ.model;
+        emptySlot.supplier = occ.supplier;
+        emptySlot.volumesPerItem = occ.volumesPerItem;
         emptySlot.quantity = occ.quantity;
         emptySlot.unit = occ.unit;
         emptySlot.status = occ.status || 'occupied';
         emptySlot.updatedAt = new Date().toISOString();
         emptySlot.notes = occ.notes;
+        if (emptySlot.status === 'reserved') {
+          emptySlot.reservedStore = occ.reservedStore;
+          emptySlot.reservedQuantity = occ.reservedQuantity;
+          emptySlot.reservedAt = occ.reservedAt;
+          emptySlot.reservedBy = occ.reservedBy;
+          emptySlot.reservedByEmail = occ.reservedByEmail;
+        }
         relocatedDetails.push({
           sku: occ.sku || 'Sem SKU',
           fromCode: occ.code,

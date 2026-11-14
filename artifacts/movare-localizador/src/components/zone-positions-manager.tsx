@@ -41,7 +41,7 @@ import {
   migratePositionsOnPresetChange,
 } from '../zone-internal-positions';
 import type { UserRole } from '../lib/auth';
-import { resolveStatusAfterUnreserve } from '../wms-operations';
+import { formatReservationDateTime, resolveStatusAfterUnreserve } from '../wms-operations';
 
 type ZoneInternalPositionsManagerProps = {
   element: DrawingElement;
@@ -52,6 +52,8 @@ type ZoneInternalPositionsManagerProps = {
   isDark?: boolean;
   readOnly?: boolean;
   userRole?: UserRole;
+  currentUserName?: string;
+  currentUserEmail?: string;
 };
 
 export function getPositionDimensions(
@@ -96,6 +98,8 @@ export function ZoneInternalPositionsManager({
   isDark = true,
   readOnly = false,
   userRole = 'visitor',
+  currentUserName,
+  currentUserEmail,
 }: ZoneInternalPositionsManagerProps) {
   const profile = getCategoryProfile(element.category);
   const safeScaleRatio = Number.isFinite(scaleRatio) && scaleRatio > 0 ? scaleRatio : 25;
@@ -163,13 +167,31 @@ export function ZoneInternalPositionsManager({
   // Atualiza todas as células da mesma fileira (códigos iguais) de uma só vez
   const handleUpdateRowPositions = (targetCode: string, patch: Partial<InternalPosition>) => {
     if (readOnly) return;
+    const nowIso = new Date().toISOString();
+    const resolvedBy = currentUserName?.trim() || currentUserEmail?.trim() || 'Administrador';
     const updated = positions.map((p) => {
       if (p.code !== targetCode) return p;
-      return {
+      const merged: InternalPosition = {
         ...p,
         ...patch,
-        updatedAt: new Date().toISOString(),
+        updatedAt: nowIso,
       };
+      if (patch.status === 'reserved') {
+        merged.reservedAt = patch.reservedAt || p.reservedAt || nowIso;
+        merged.reservedBy = patch.reservedBy || p.reservedBy || resolvedBy;
+        merged.reservedByEmail = patch.reservedByEmail || p.reservedByEmail || currentUserEmail;
+        merged.reservedQuantity =
+          patch.reservedQuantity ??
+          p.reservedQuantity ??
+          (typeof p.quantity === 'number' && p.quantity > 0 ? p.quantity : undefined);
+      } else if (patch.status) {
+        merged.reservedStore = undefined;
+        merged.reservedAt = undefined;
+        merged.reservedBy = undefined;
+        merged.reservedByEmail = undefined;
+        merged.reservedQuantity = undefined;
+      }
+      return merged;
     });
 
     onUpdateElement({
@@ -304,13 +326,31 @@ export function ZoneInternalPositionsManager({
   // Atualização de uma posição interna específica
   const handleUpdatePosition = (posId: string, patch: Partial<InternalPosition>) => {
     if (readOnly) return;
+    const nowIso = new Date().toISOString();
+    const resolvedBy = currentUserName?.trim() || currentUserEmail?.trim() || 'Administrador';
     const updated = positions.map((p) => {
       if (p.id !== posId) return p;
-      return {
+      const merged: InternalPosition = {
         ...p,
         ...patch,
-        updatedAt: new Date().toISOString(),
+        updatedAt: nowIso,
       };
+      if (patch.status === 'reserved') {
+        merged.reservedAt = patch.reservedAt || p.reservedAt || nowIso;
+        merged.reservedBy = patch.reservedBy || p.reservedBy || resolvedBy;
+        merged.reservedByEmail = patch.reservedByEmail || p.reservedByEmail || currentUserEmail;
+        merged.reservedQuantity =
+          patch.reservedQuantity ??
+          p.reservedQuantity ??
+          (typeof p.quantity === 'number' && p.quantity > 0 ? p.quantity : undefined);
+      } else if (patch.status) {
+        merged.reservedStore = undefined;
+        merged.reservedAt = undefined;
+        merged.reservedBy = undefined;
+        merged.reservedByEmail = undefined;
+        merged.reservedQuantity = undefined;
+      }
+      return merged;
     });
 
     onUpdateElement({
@@ -1196,6 +1236,103 @@ export function ZoneInternalPositionsManager({
                   </div>
                 </div>
 
+                {/* Detalhes da Reserva (Loja, Quantidade, Data e Responsável) quando reservada */}
+                {activePosition.status === 'reserved' && (
+                  <div className="p-2.5 rounded-lg bg-amber-950/35 border border-amber-500/45 space-y-2 text-[11px]">
+                    <div className="grid grid-cols-3 gap-2">
+                      <div className="col-span-2">
+                        <label className="block text-[10px] font-bold text-amber-300 mb-0.5">
+                          Loja da Reserva
+                        </label>
+                        <input
+                          type="text"
+                          disabled={readOnly}
+                          placeholder="Ex: Loja Centro, Filial 02..."
+                          value={activePosition.reservedStore || ''}
+                          onChange={(e) =>
+                            handleUpdatePosition(activePosition.id, {
+                              reservedStore: e.target.value,
+                            })
+                          }
+                          className="w-full px-2 py-1 text-xs font-semibold rounded bg-slate-950 border border-amber-500/40 text-amber-100 placeholder:text-slate-500 focus:border-amber-400 focus:outline-none disabled:opacity-65"
+                        />
+                      </div>
+                      <div className="col-span-1">
+                        <label className="block text-[10px] font-bold text-amber-300 mb-0.5">
+                          Qtd. Res.
+                        </label>
+                        <input
+                          type="number"
+                          min={1}
+                          max={
+                            typeof activePosition.quantity === 'number' && activePosition.quantity > 0
+                              ? activePosition.quantity
+                              : undefined
+                          }
+                          step="1"
+                          disabled={readOnly}
+                          value={
+                            activePosition.reservedQuantity ??
+                            (typeof activePosition.quantity === 'number' && activePosition.quantity > 0
+                              ? activePosition.quantity
+                              : '')
+                          }
+                          onChange={(e) => {
+                            const raw = e.target.value;
+                            if (raw === '') {
+                              handleUpdatePosition(activePosition.id, { reservedQuantity: undefined });
+                              return;
+                            }
+                            const parsed = Number(raw);
+                            if (!Number.isFinite(parsed)) return;
+                            const stockMax =
+                              typeof activePosition.quantity === 'number' && activePosition.quantity > 0
+                                ? activePosition.quantity
+                                : undefined;
+                            const clamped =
+                              stockMax !== undefined
+                                ? Math.max(0, Math.min(stockMax, parsed))
+                                : Math.max(0, parsed);
+                            handleUpdatePosition(activePosition.id, {
+                              reservedQuantity: clamped > 0 ? clamped : undefined,
+                            });
+                          }}
+                          className="w-full px-2 py-1 text-xs font-mono font-bold tabular-nums rounded bg-slate-950 border border-amber-500/40 text-amber-100 focus:border-amber-400 focus:outline-none disabled:opacity-65"
+                        />
+                      </div>
+                    </div>
+                    {typeof activePosition.quantity === 'number' && activePosition.quantity > 0 && (
+                      <div className="flex items-center justify-between text-[10px] text-amber-200/85 tabular-nums">
+                        <span>
+                          Estoque total:{' '}
+                          <strong className="font-mono">
+                            {activePosition.quantity} {activePosition.unit || 'UN'}
+                          </strong>
+                        </span>
+                        {typeof activePosition.reservedQuantity === 'number' &&
+                          activePosition.reservedQuantity > 0 &&
+                          activePosition.reservedQuantity < activePosition.quantity && (
+                            <span className="text-emerald-300 font-medium">
+                              {Math.max(0, activePosition.quantity - activePosition.reservedQuantity)}{' '}
+                              {activePosition.unit || 'UN'} disp.
+                            </span>
+                          )}
+                      </div>
+                    )}
+                    <div className="flex items-center justify-between gap-2 text-[10px] text-amber-200/90">
+                      <span>
+                        Resp.:{' '}
+                        <strong>
+                          {activePosition.reservedBy || activePosition.reservedByEmail || 'Não informado'}
+                        </strong>
+                      </span>
+                      <span className="font-mono tabular-nums">
+                        {formatReservationDateTime(activePosition.reservedAt || activePosition.updatedAt)}
+                      </span>
+                    </div>
+                  </div>
+                )}
+
                 {/* Porte do Volume alocado na Célula */}
                 <div>
                   <label className="block text-[10px] font-semibold text-slate-400 mb-0.5">
@@ -1443,11 +1580,36 @@ export function ZoneInternalPositionsManager({
                         </div>
                       </div>
 
-                      {pos.sku && (
-                        <div className="flex items-center gap-2 text-[11px] font-mono text-slate-300 pt-0.5">
-                          <span className="text-slate-500">SKU:</span>
-                          <span className="font-bold text-slate-200">{pos.sku}</span>
-                          {pos.quantity ? <span className="text-slate-400">({pos.quantity} UN)</span> : null}
+                      {(pos.sku || (pos.quantity && pos.quantity > 0)) && (
+                        <div className="flex items-center gap-2 text-[11px] font-mono text-slate-300 pt-0.5 tabular-nums">
+                          {pos.sku && (
+                            <>
+                              <span className="text-slate-500">SKU:</span>
+                              <span className="font-bold text-slate-200">{pos.sku}</span>
+                            </>
+                          )}
+                          {pos.quantity && pos.quantity > 0 ? (
+                            <span className="text-slate-400">
+                              {pos.status === 'reserved'
+                                ? `(${pos.reservedQuantity ?? pos.quantity}/${pos.quantity} ${pos.unit || 'UN'})`
+                                : `(${pos.quantity} ${pos.unit || 'UN'})`}
+                            </span>
+                          ) : null}
+                        </div>
+                      )}
+                      {pos.status === 'reserved' && (
+                        <div className="flex items-center justify-between gap-2 text-[10px] text-amber-300/90 pt-0.5 tabular-nums">
+                          <span className="truncate">
+                            Loja: <strong>{pos.reservedStore || 'Não informada'}</strong>
+                            {pos.reservedQuantity && !pos.quantity
+                              ? ` · ${pos.reservedQuantity} ${pos.unit || 'UN'}`
+                              : ''}
+                          </span>
+                          {(pos.reservedBy || pos.reservedByEmail) && (
+                            <span className="truncate opacity-85">
+                              {pos.reservedBy || pos.reservedByEmail}
+                            </span>
+                          )}
                         </div>
                       )}
                     </div>

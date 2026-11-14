@@ -51,6 +51,8 @@ type SelectionInspectorProps = {
   isDark: boolean;
   isAdmin: boolean;
   userRole?: UserRole;
+  currentUserName?: string;
+  currentUserEmail?: string;
   isMobile?: boolean;
   onReplaceItem: (updated: DrawingElement) => void;
   onPatchElements: (mapper: (elements: DrawingElement[]) => DrawingElement[], toastMsg?: string) => void;
@@ -119,6 +121,8 @@ export function SelectionInspector({
   isDark,
   isAdmin,
   userRole = 'visitor',
+  currentUserName,
+  currentUserEmail,
   isMobile = false,
   onReplaceItem,
   onPatchElements,
@@ -708,6 +712,8 @@ export function SelectionInspector({
                 isDark={isDark}
                 readOnly={false}
                 userRole={userRole}
+                currentUserName={currentUserName}
+                currentUserEmail={currentUserEmail}
               />
             )}
 

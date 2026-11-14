@@ -19,7 +19,7 @@ import {
   type ProductSize,
 } from '../editor-model';
 import type { PositionStockStatus } from '../zone-internal-positions';
-import { buildSearchCatalog, filterSearchCatalog } from '../wms-operations';
+import { buildSearchCatalog, filterSearchCatalog, formatReservationDateTime } from '../wms-operations';
 
 export type SearchResult = {
   areaId: string;
@@ -35,7 +35,14 @@ export type SearchResult = {
   model?: string;
   supplier?: string;
   volumesPerItem?: number;
+  quantity?: number;
+  unit?: string;
   status?: RackSlot['status'] | PositionStockStatus;
+  reservedStore?: string;
+  reservedQuantity?: number;
+  reservedAt?: string;
+  reservedBy?: string;
+  reservedByEmail?: string;
   productSize?: ProductSize;
   category?: string;
   x: number;
@@ -391,6 +398,30 @@ export function WMSSearchDialog({
                           <span className="text-[10px] opacity-75">({sizeObj.short})</span>
                         )}
                       </div>
+
+                      {isReserved && (
+                        <div
+                          className={`mt-1 text-[10px] font-medium flex items-center gap-2 flex-wrap ${
+                            isDark ? 'text-amber-300/90' : 'text-amber-800'
+                          }`}
+                        >
+                          <span>Loja: <strong>{item.reservedStore || 'Não informada'}</strong></span>
+                          {(typeof item.reservedQuantity === 'number' || typeof item.quantity === 'number') && (
+                            <span className="font-mono tabular-nums">
+                              · Qtd.: <strong>{item.reservedQuantity ?? item.quantity}</strong>
+                              {typeof item.quantity === 'number' && `/${item.quantity}`} {item.unit || 'UN'}
+                            </span>
+                          )}
+                          {(item.reservedBy || item.reservedByEmail) && (
+                            <span>· Resp.: <strong>{item.reservedBy || item.reservedByEmail}</strong></span>
+                          )}
+                          {item.reservedAt && (
+                            <span className="font-mono tabular-nums opacity-85">
+                              · {formatReservationDateTime(item.reservedAt)}
+                            </span>
+                          )}
+                        </div>
+                      )}
                     </div>
                   </div>
 

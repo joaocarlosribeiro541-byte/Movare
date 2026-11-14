@@ -16,6 +16,7 @@ import { PRODUCT_CATEGORIES, type FloorArea } from '../editor-model';
 import {
   buildSearchCatalog,
   filterSearchCatalog,
+  formatReservationDateTime,
   type SearchCatalogItem,
 } from '../wms-operations';
 
@@ -304,6 +305,38 @@ export function ConferentePanel({
                     </div>
                   )}
                 </div>
+
+                {isReserved && (
+                  <div
+                    className={`px-2 py-1.5 rounded-lg border text-[10px] space-y-0.5 ${
+                      isDark
+                        ? 'bg-amber-950/35 border-amber-500/35 text-amber-200'
+                        : 'bg-amber-100/70 border-amber-300 text-amber-950'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span>Loja: <strong>{item.reservedStore || 'Não informada'}</strong></span>
+                      {item.reservedAt && (
+                        <span className="font-mono tabular-nums opacity-85">
+                          {formatReservationDateTime(item.reservedAt)}
+                        </span>
+                      )}
+                    </div>
+                    {(typeof item.reservedQuantity === 'number' || typeof item.quantity === 'number') && (
+                      <div className="font-mono tabular-nums">
+                        Reserva: <strong>{item.reservedQuantity ?? item.quantity} {item.unit || 'UN'}</strong>
+                        {typeof item.quantity === 'number' && (
+                          <span className="opacity-85"> (estoque total: {item.quantity} {item.unit || 'UN'})</span>
+                        )}
+                      </div>
+                    )}
+                    {(item.reservedBy || item.reservedByEmail) && (
+                      <div className="truncate opacity-90">
+                        Responsável: <strong>{item.reservedBy || item.reservedByEmail}</strong>
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 <button
                   type="button"

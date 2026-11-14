@@ -353,18 +353,43 @@ export default function Editor() {
   );
 
   const handleToggleReservePosition = useCallback(
-    async (elementId: string, positionId: string) => {
+    async (
+      elementId: string,
+      positionId: string,
+      reservationStore?: string,
+      reservationQuantity?: number
+    ) => {
       if (!canPersistReserve) {
         setToast('Seu cargo atual não possui permissão para reservar posições.');
         return;
       }
-      const res = await togglePositionReservation(elementId, positionId, canPersistReserve);
+      const responsibleName =
+        auth.profile?.fullName?.trim() ||
+        auth.user?.email?.trim() ||
+        'Operador';
+      const res = await togglePositionReservation(elementId, positionId, canPersistReserve, {
+        store: reservationStore?.trim() || undefined,
+        quantity:
+          typeof reservationQuantity === 'number' &&
+          Number.isFinite(reservationQuantity) &&
+          reservationQuantity > 0
+            ? reservationQuantity
+            : undefined,
+        reservedBy: responsibleName,
+        reservedByEmail: auth.user?.email || undefined,
+        reservedAt: new Date().toISOString(),
+      });
       if (res.changed) {
         if (res.nextStatus === 'reserved') {
+          const qtySuffix =
+            typeof reservationQuantity === 'number' && reservationQuantity > 0
+              ? ` (${reservationQuantity} un)`
+              : '';
+          const storeSuffix = reservationStore?.trim() ? ` para "${reservationStore.trim()}"` : '';
           setToast(
             !isAdmin && canPersistReserve && auth.isConfigured
-              ? 'Posição marcada como RESERVADO (sincronizado na nuvem).'
-              : 'Posição marcada como RESERVADO.'
+              ? `Posição reservada${qtySuffix}${storeSuffix} (sincronizado na nuvem).`
+              : `Posição reservada${qtySuffix}${storeSuffix}.`
           );
         } else {
           setToast(
@@ -375,7 +400,7 @@ export default function Editor() {
         }
       }
     },
-    [auth.isConfigured, canPersistReserve, isAdmin, togglePositionReservation]
+    [auth.isConfigured, auth.profile?.fullName, auth.user?.email, canPersistReserve, isAdmin, togglePositionReservation]
   );
 
   // Abre painel operacional automaticamente quando o cargo possui permissão de Conferente
@@ -2441,38 +2466,43 @@ export default function Editor() {
                                   );
                                 })}
 
-                                {/* Rótulo da Rua WMS & Etiquetas de Produto */}
-                                <g pointerEvents="none">
-                                  <text
-                                    x={rendered.x + 8}
-                                    y={rendered.y + 18}
-                                    fontSize={11}
-                                    fontFamily="'JetBrains Mono', monospace"
-                                    fontWeight="bold"
-                                    fill={color}
-                                  >
-                                    RUA {rendered.street || rendered.name}
-                                  </text>
+                                {/* Rótulo da Rua WMS (limpo e sem duplicar prefixo) */}
+                                {(() => {
+                                  const rawStreet = (rendered.street || rendered.name || '').trim();
+                                  const rackTitle = /^RUA\b/i.test(rawStreet) ? rawStreet : `RUA ${rawStreet}`;
+                                  const maxRackChars = Math.max(4, Math.floor((rendered.width - (isLocked ? 30 : 16)) / 6.8));
+                                  const clippedRackTitle =
+                                    rackTitle.length > maxRackChars && maxRackChars >= 4
+                                      ? `${rackTitle.slice(0, maxRackChars - 1)}…`
+                                      : rackTitle.slice(0, maxRackChars);
 
-                                  {/* Badges de SKU e Tamanho */}
-                                  <g transform={`translate(${rendered.x + 8}, ${rendered.y + 26})`}>
-                                    {sizeDef && (
-                                      <text fontSize={9} fontWeight="bold" fill="#f97316">
-                                        [{sizeDef.short}]
-                                      </text>
-                                    )}
-                                    {rendered.skuCode && (
+                                  return (
+                                    <g pointerEvents="none">
                                       <text
-                                        x={sizeDef ? 36 : 0}
-                                        fontSize={9}
+                                        x={rendered.x + 8}
+                                        y={rendered.y + 16}
+                                        fontSize={10.5}
                                         fontFamily="'JetBrains Mono', monospace"
-                                        fill={isDark ? '#cbd5e1' : '#475569'}
+                                        fontWeight="bold"
+                                        fill={color}
                                       >
-                                        SKU: {rendered.skuCode}
+                                        {clippedRackTitle}
                                       </text>
-                                    )}
-                                  </g>
-                                </g>
+
+                                      {rendered.height >= 36 && rendered.skuCode && rendered.width >= 70 && (
+                                        <text
+                                          x={rendered.x + 8}
+                                          y={rendered.y + 28}
+                                          fontSize={8.5}
+                                          fontFamily="'JetBrains Mono', monospace"
+                                          fill={isDark ? '#cbd5e1' : '#475569'}
+                                        >
+                                          {rendered.skuCode.slice(0, Math.max(4, Math.floor((rendered.width - 16) / 5.5)))}
+                                        </text>
+                                      )}
+                                    </g>
+                                  );
+                                })()}
 
                                 {/* Indicador de Bloqueio 🔒 */}
                                 {isLocked && (
@@ -2597,75 +2627,105 @@ export default function Editor() {
                                             }}
                                           />
 
-                                          {/* Rótulo do Código da Posição */}
-                                          {relHeight >= 12 && relWidth >= 24 && (
-                                            <text
-                                              x={posX + 4}
-                                              y={posY + Math.min(13, Math.max(10, relHeight - 3))}
-                                              fontSize={Math.min(10, Math.max(7, relHeight * 0.45))}
-                                              fontFamily="'JetBrains Mono', monospace"
-                                              fontWeight="bold"
-                                              fill={
-                                                isPosSelected
-                                                  ? '#38bdf8'
-                                                  : isOccupied
-                                                  ? '#4ade80'
-                                                  : isReserved
-                                                  ? isDark ? '#fef08a' : '#854d0e'
-                                                  : isDark
-                                                  ? '#94a3b8'
-                                                  : '#64748b'
-                                              }
-                                              pointerEvents="none"
-                                            >
-                                              {pos.code}
-                                              {pos.sku && relWidth >= 70 ? ` · ${pos.sku}` : ''}
-                                            </text>
-                                          )}
+                                          {/* Rótulo do Código da Posição (sempre isolado e sem colidir com selo de reserva) */}
+                                          {relHeight >= 12 && relWidth >= 22 && (() => {
+                                            const showResPill = isReserved && relWidth >= 56 && relHeight >= 18;
+                                            const showResDot = isReserved && !showResPill && relWidth >= 14 && relHeight >= 12;
+                                            const reservedRightSpace = showResPill ? 28 : showResDot ? 11 : 5;
+                                            const availWidth = Math.max(10, relWidth - 4 - reservedRightSpace);
+                                            const codeFontSize = Math.min(9.5, Math.max(7, relHeight * 0.36));
+                                            const charW = codeFontSize * 0.62;
+                                            const maxCodeChars = Math.max(2, Math.floor(availWidth / charW));
+                                            const rawCode = (pos.code || '').trim();
+                                            const displayCode =
+                                              rawCode.length > maxCodeChars && maxCodeChars >= 4
+                                                ? `${rawCode.slice(0, maxCodeChars - 1)}…`
+                                                : rawCode.slice(0, maxCodeChars);
 
-                                          {/* Selo visual explícito RESERVADO em amarelo */}
+                                            return (
+                                              <text
+                                                x={posX + 4}
+                                                y={posY + Math.min(12, Math.max(9, relHeight * 0.45))}
+                                                fontSize={codeFontSize}
+                                                fontFamily="'JetBrains Mono', monospace"
+                                                fontWeight="bold"
+                                                fill={
+                                                  isPosSelected
+                                                    ? '#38bdf8'
+                                                    : isOccupied
+                                                    ? '#4ade80'
+                                                    : isReserved
+                                                    ? isDark ? '#fef08a' : '#854d0e'
+                                                    : isDark
+                                                    ? '#94a3b8'
+                                                    : '#64748b'
+                                                }
+                                                pointerEvents="none"
+                                              >
+                                                {displayCode}
+                                              </text>
+                                            );
+                                          })()}
+
+                                          {/* Indicador compacto de RESERVA no canto superior direito da célula */}
                                           {isReserved && relWidth >= 14 && relHeight >= 12 && (
-                                            relWidth >= 58 && relHeight >= 22 ? (
-                                              <g transform={`translate(${posX + relWidth - 48}, ${posY + 3})`} pointerEvents="none">
-                                                <rect width={45} height={11} rx={2.5} fill="#eab308" />
+                                            relWidth >= 56 && relHeight >= 18 ? (
+                                              <g transform={`translate(${posX + relWidth - 26}, ${posY + 3})`} pointerEvents="none">
+                                                <rect width={23} height={10} rx={2} fill="#eab308" />
                                                 <text
-                                                  x={22.5}
-                                                  y={8}
+                                                  x={11.5}
+                                                  y={7.5}
                                                   textAnchor="middle"
-                                                  fontSize={6.5}
+                                                  fontSize={6.2}
                                                   fontFamily="'JetBrains Mono', monospace"
                                                   fontWeight="900"
                                                   fill="#0f172a"
                                                 >
-                                                  RESERVADO
+                                                  RES
                                                 </text>
                                               </g>
                                             ) : (
                                               <circle
                                                 cx={posX + relWidth - 5}
                                                 cy={posY + 5}
-                                                r={3.2}
+                                                r={2.8}
                                                 fill="#facc15"
                                                 stroke="#0f172a"
-                                                strokeWidth={0.8}
+                                                strokeWidth={0.7}
                                                 pointerEvents="none"
                                               />
                                             )
                                           )}
 
-                                          {/* Detalhes de Estoque: Qtd e Unidade se houver espaço vertical */}
-                                          {pos.status !== 'empty' && relWidth >= 50 && relHeight >= 26 && (
-                                            <text
-                                              x={posX + 4}
-                                              y={posY + 22}
-                                              fontSize={8}
-                                              fontFamily="'JetBrains Mono', monospace"
-                                              fill={isReserved ? (isDark ? '#fde047' : '#854d0e') : isDark ? '#cbd5e1' : '#475569'}
-                                              pointerEvents="none"
-                                            >
-                                              {pos.quantity ? `${pos.quantity} ${pos.unit || 'UN'}` : isReserved ? 'RES' : ''}
-                                            </text>
-                                          )}
+                                          {/* Linha secundária limpa (SKU, Loja da reserva ou Qtd) sem vazar da célula */}
+                                          {pos.status !== 'empty' && relWidth >= 36 && relHeight >= 25 && (() => {
+                                            const maxSubChars = Math.max(3, Math.floor((relWidth - 8) / 4.8));
+                                            const rawSub = isReserved && pos.reservedStore
+                                              ? pos.reservedStore.trim()
+                                              : pos.sku
+                                              ? pos.sku.trim()
+                                              : pos.quantity
+                                              ? `${pos.quantity} ${pos.unit || 'UN'}`
+                                              : '';
+                                            if (!rawSub) return null;
+                                            const displaySub =
+                                              rawSub.length > maxSubChars && maxSubChars >= 4
+                                                ? `${rawSub.slice(0, maxSubChars - 1)}…`
+                                                : rawSub.slice(0, maxSubChars);
+                                            return (
+                                              <text
+                                                x={posX + 4}
+                                                y={posY + Math.min(relHeight - 4, 22)}
+                                                fontSize={7.5}
+                                                fontFamily="'JetBrains Mono', monospace"
+                                                fontWeight={isReserved && pos.reservedStore ? '600' : '400'}
+                                                fill={isReserved ? (isDark ? '#fde047' : '#854d0e') : isDark ? '#cbd5e1' : '#475569'}
+                                                pointerEvents="none"
+                                              >
+                                                {displaySub}
+                                              </text>
+                                            );
+                                          })()}
                                         </g>
                                       );
                                     })}
@@ -2699,110 +2759,158 @@ export default function Editor() {
                                   </g>
                                 )}
 
-                                {/* Informações da Zona e Células de Produtos */}
+                                {/* Nomenclatura Limpa da Zona (posicionada acima da borda quando há células internas para não sobrepor códigos) */}
                                 <g pointerEvents="none">
                                   {rendered.internalPositions && rendered.internalPositions.length > 0 ? (() => {
                                     const zoneReservedCount = rendered.internalPositions.filter((p) => p.status === 'reserved').length;
-                                    const labelStr = `${(rendered.name || '').slice(0, 22)} [${rendered.internalPositions.length} pos]${zoneReservedCount > 0 ? ` · ${zoneReservedCount} RES` : ''}`;
+                                    const rawZoneName = (rendered.name || 'Zona').trim();
+                                    const reservedBadgeText = zoneReservedCount > 0 && baseZoneW >= 125 ? ` · ${zoneReservedCount} RES` : '';
+                                    const maxBadgeW = Math.max(64, baseZoneW - (isLocked ? 20 : 0));
+                                    const maxNameChars = Math.max(
+                                      6,
+                                      Math.floor((maxBadgeW - 14 - reservedBadgeText.length * 5.8) / 5.8)
+                                    );
+                                    const clippedName =
+                                      rawZoneName.length > maxNameChars
+                                        ? `${rawZoneName.slice(0, Math.max(3, maxNameChars - 1))}…`
+                                        : rawZoneName;
+                                    const labelStr = `${clippedName}${reservedBadgeText}`;
+                                    const plateW = Math.min(maxBadgeW, Math.max(46, labelStr.length * 5.9 + 14));
+
                                     return (
-                                      <g transform={`translate(${baseZoneX + 6}, ${baseZoneY + 12})`}>
+                                      <g transform={`translate(${baseZoneX}, ${baseZoneY - 17})`}>
                                         <rect
-                                          x={-2}
-                                          y={-10}
-                                          width={Math.min(
-                                            Math.max(24, baseZoneW - 8),
-                                            Math.max(96, labelStr.length * 5.8 + 14)
-                                          )}
-                                          height={16}
+                                          x={0}
+                                          y={0}
+                                          width={plateW}
+                                          height={15}
                                           rx={3}
-                                          fill={zoneReservedCount > 0 ? (isDark ? 'rgba(66, 32, 6, 0.92)' : 'rgba(254, 249, 195, 0.96)') : isDark ? 'rgba(15, 23, 42, 0.85)' : 'rgba(255, 255, 255, 0.85)'}
+                                          fill={
+                                            zoneReservedCount > 0
+                                              ? isDark
+                                                ? 'rgba(66, 32, 6, 0.96)'
+                                                : 'rgba(254, 249, 195, 0.98)'
+                                              : isDark
+                                              ? 'rgba(15, 23, 42, 0.94)'
+                                              : 'rgba(255, 255, 255, 0.96)'
+                                          }
                                           stroke={zoneReservedCount > 0 ? '#eab308' : color}
-                                          strokeWidth={zoneReservedCount > 0 ? 1.1 : 0.8}
+                                          strokeWidth={1}
                                         />
                                         <text
-                                          x={2}
-                                          y={1}
+                                          x={6}
+                                          y={10.5}
                                           fontSize={9}
                                           fontWeight="bold"
-                                          fill={zoneReservedCount > 0 ? (isDark ? '#fde047' : '#854d0e') : isDark ? '#f8fafc' : '#0f172a'}
+                                          fill={
+                                            zoneReservedCount > 0
+                                              ? isDark
+                                                ? '#fde047'
+                                                : '#854d0e'
+                                              : isDark
+                                              ? '#f8fafc'
+                                              : '#0f172a'
+                                          }
                                           fontFamily="'JetBrains Mono', monospace"
                                         >
                                           {labelStr}
                                         </text>
                                       </g>
                                     );
-                                  })() : baseZoneW >= 75 && baseZoneH >= 45 ? (
-                                    <>
-                                      <text
-                                        x={baseZoneX + 8}
-                                        y={baseZoneY + 18}
-                                        fontSize={11}
-                                        fontWeight="700"
-                                        fill={isDark ? '#f1f5f9' : '#1e293b'}
-                                      >
-                                        {rendered.name}
-                                      </text>
+                                  })() : baseZoneW >= 75 && baseZoneH >= 42 ? (() => {
+                                    const rawZoneName = (rendered.name || 'Zona').trim();
+                                    const maxTitleChars = Math.max(5, Math.floor((baseZoneW - (isLocked ? 32 : 16)) / 6.6));
+                                    const clippedZoneName =
+                                      rawZoneName.length > maxTitleChars
+                                        ? `${rawZoneName.slice(0, Math.max(3, maxTitleChars - 1))}…`
+                                        : rawZoneName;
 
-                                      {/* Badges Dedicadas de Produto */}
-                                      <g transform={`translate(${baseZoneX + 8}, ${baseZoneY + 26})`}>
-                                        {catDef && (
-                                          <text fontSize={9} fontWeight="bold" fill={catDef.color}>
-                                            ● {catDef.badge}
+                                    return (
+                                      <>
+                                        <text
+                                          x={baseZoneX + 8}
+                                          y={baseZoneY + 17}
+                                          fontSize={10.5}
+                                          fontWeight="700"
+                                          fill={isDark ? '#f1f5f9' : '#1e293b'}
+                                        >
+                                          {clippedZoneName}
+                                        </text>
+
+                                        {catDef && baseZoneH >= 48 && (
+                                          <text
+                                            x={baseZoneX + 8}
+                                            y={baseZoneY + 30}
+                                            fontSize={8.5}
+                                            fontWeight="600"
+                                            fill={catDef.color}
+                                          >
+                                            {catDef.badge}
                                           </text>
                                         )}
-                                        {sizeDef && (
-                                          <text x={catDef ? 50 : 0} fontSize={9} fill={isDark ? '#94a3b8' : '#64748b'}>
-                                            [{sizeDef.label}]
+
+                                        {rendered.skuCode && baseZoneH >= 58 && (
+                                          <text
+                                            x={baseZoneX + 8}
+                                            y={baseZoneY + 43}
+                                            fontSize={9}
+                                            fontFamily="'JetBrains Mono', monospace"
+                                            fontWeight="bold"
+                                            fill="#f97316"
+                                          >
+                                            {rendered.skuCode.slice(0, Math.max(4, Math.floor((baseZoneW - 16) / 5.8)))}
+                                          </text>
+                                        )}
+                                      </>
+                                    );
+                                  })() : (() => {
+                                    const shortName = rendered.name?.includes('Célula')
+                                      ? rendered.name.split('Célula').pop()?.trim() || ''
+                                      : (rendered.name || '').trim();
+                                    const maxSmallChars = Math.max(3, Math.floor((baseZoneW - 8) / 5.6));
+                                    const clippedSmall =
+                                      shortName.length > maxSmallChars
+                                        ? `${shortName.slice(0, Math.max(2, maxSmallChars - 1))}…`
+                                        : shortName;
+
+                                    return (
+                                      <g transform={`translate(${baseZoneX + 4}, ${baseZoneY + 13})`}>
+                                        <text
+                                          fontSize={9}
+                                          fontFamily="'JetBrains Mono', monospace"
+                                          fontWeight="bold"
+                                          fill={isDark ? '#f8fafc' : '#0f172a'}
+                                        >
+                                          {clippedSmall}
+                                        </text>
+                                        {rendered.skuCode && baseZoneH >= 28 && (
+                                          <text
+                                            y={10}
+                                            fontSize={7.5}
+                                            fontFamily="'JetBrains Mono', monospace"
+                                            fill="#f97316"
+                                            fontWeight="bold"
+                                          >
+                                            {rendered.skuCode.slice(0, maxSmallChars)}
                                           </text>
                                         )}
                                       </g>
-
-                                      {rendered.skuCode && (
-                                        <text
-                                          x={baseZoneX + 8}
-                                          y={baseZoneY + 48}
-                                          fontSize={10}
-                                          fontFamily="'JetBrains Mono', monospace"
-                                          fontWeight="bold"
-                                          fill="#f97316"
-                                        >
-                                          🏷️ {rendered.skuCode}
-                                        </text>
-                                      )}
-                                    </>
-                                  ) : (
-                                    // Exibição adaptativa compacta para células divididas menores
-                                    <g transform={`translate(${baseZoneX + 4}, ${baseZoneY + 14})`}>
-                                      <text
-                                        fontSize={10}
-                                        fontFamily="'JetBrains Mono', monospace"
-                                        fontWeight="bold"
-                                        fill={isDark ? '#f8fafc' : '#0f172a'}
-                                      >
-                                        {rendered.name?.includes('Célula')
-                                          ? rendered.name.split('Célula').pop()?.trim()
-                                          : (rendered.name || '').slice(0, 8)}
-                                      </text>
-                                      {rendered.skuCode && baseZoneH >= 26 && (
-                                        <text
-                                          y={11}
-                                          fontSize={8}
-                                          fontFamily="'JetBrains Mono', monospace"
-                                          fill="#f97316"
-                                          fontWeight="bold"
-                                        >
-                                          {rendered.skuCode.slice(0, 10)}
-                                        </text>
-                                      )}
-                                    </g>
-                                  )}
+                                    );
+                                  })()}
                                 </g>
 
-                                {/* Indicador de Bloqueio 🔒 */}
+                                {/* Indicador de Bloqueio 🔒 (acima da borda quando há células internas para não tampar códigos) */}
                                 {isLocked && (
-                                  <g transform={`translate(${baseZoneX + baseZoneW - 24}, ${baseZoneY + 6})`} pointerEvents="none">
-                                    <rect width={18} height={18} rx={4} fill="#eab308" />
-                                    <text x={9} y={13} textAnchor="middle" fontSize={11} fill="#000">🔒</text>
+                                  <g
+                                    transform={
+                                      rendered.internalPositions && rendered.internalPositions.length > 0
+                                        ? `translate(${baseZoneX + baseZoneW - 16}, ${baseZoneY - 17})`
+                                        : `translate(${baseZoneX + baseZoneW - 22}, ${baseZoneY + 5})`
+                                    }
+                                    pointerEvents="none"
+                                  >
+                                    <rect width={16} height={15} rx={3} fill="#eab308" />
+                                    <text x={8} y={11.5} textAnchor="middle" fontSize={9.5} fill="#000">🔒</text>
                                   </g>
                                 )}
                               </g>
@@ -3336,8 +3444,8 @@ export default function Editor() {
                       navigateToPoint(selected.x + selected.width / 2, selected.y + selected.height / 2, 1.4);
                     }
                   }}
-                  onToggleReservePosition={(elId, posId) => {
-                    void handleToggleReservePosition(elId, posId);
+                  onToggleReservePosition={(elId, posId, storeName, reserveQty) => {
+                    void handleToggleReservePosition(elId, posId, storeName, reserveQty);
                   }}
                   onSwitchToEdit={
                     isAdmin
@@ -3412,6 +3520,8 @@ export default function Editor() {
                 isDark={isDark}
                 isAdmin={isAdmin}
                 userRole={userRole}
+                currentUserName={auth.profile?.fullName || auth.user?.email || undefined}
+                currentUserEmail={auth.user?.email || undefined}
                 onReplaceItem={replaceItem}
                 onPatchElements={(mapper, toastMsg) => {
                   patchActive((a) => ({ ...a, elements: mapper(a.elements) }));
@@ -3546,6 +3656,8 @@ export default function Editor() {
                   isDark={isDark}
                   isAdmin={isAdmin}
                   userRole={userRole}
+                  currentUserName={auth.profile?.fullName || auth.user?.email || undefined}
+                  currentUserEmail={auth.user?.email || undefined}
                   isMobile
                   onReplaceItem={replaceItem}
                   onPatchElements={(mapper, toastMsg) => {

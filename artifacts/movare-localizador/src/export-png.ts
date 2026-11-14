@@ -417,43 +417,77 @@ function drawWarehouseElements(
       ctx.lineWidth = isRack ? 2.5 : 2;
       ctx.stroke();
 
-      // Se tiver posições internas detalhadas (células), renderiza cada célula
+      // Se tiver posições internas detalhadas (células), renderiza título limpo acima da borda e células sem sobreposição
       if (item.internalPositions && item.internalPositions.length > 0) {
         drawInternalCells(ctx, item, item.internalPositions, isDark, includeProductCodes);
+
+        const zoneReservedCount = item.internalPositions.filter((p) => p.status === 'reserved').length;
+        const rawZoneName = (item.name || 'Zona').trim();
+        const resSuffix = zoneReservedCount > 0 && item.width >= 125 ? ` · ${zoneReservedCount} RES` : '';
+        ctx.font = 'bold 9px monospace';
+        const maxPlateW = Math.max(48, item.width - (item.locked ? 20 : 0));
+        let displayTitle = `${rawZoneName}${resSuffix}`;
+        while (displayTitle.length > 4 && ctx.measureText(displayTitle).width + 12 > maxPlateW) {
+          displayTitle = `${displayTitle.slice(0, -2)}…`;
+        }
+        const plateW = Math.min(maxPlateW, Math.max(46, ctx.measureText(displayTitle).width + 12));
+
+        drawRoundedRect(ctx, item.x, item.y - 17, plateW, 15, 3);
+        ctx.fillStyle = zoneReservedCount > 0
+          ? isDark ? 'rgba(66, 32, 6, 0.96)' : 'rgba(254, 249, 195, 0.98)'
+          : isDark ? 'rgba(15, 23, 42, 0.95)' : 'rgba(255, 255, 255, 0.96)';
+        ctx.fill();
+        ctx.strokeStyle = zoneReservedCount > 0 ? '#eab308' : zoneColor;
+        ctx.lineWidth = 1;
+        ctx.stroke();
+
+        ctx.fillStyle = zoneReservedCount > 0
+          ? isDark ? '#fde047' : '#854d0e'
+          : isDark ? '#f8fafc' : '#0f172a';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(displayTitle, item.x + 6, item.y - 9.5);
       } else {
         // Exibição simplificada de zona sem células divididas
         const wM = Math.round((item.width / scaleRatio) * 10) / 10;
         const hM = Math.round((item.height / scaleRatio) * 10) / 10;
 
         // Cabeçalho da zona
+        const headerH = Math.min(22, item.height * 0.42);
         ctx.fillStyle = zoneColor;
-        ctx.fillRect(item.x, item.y, item.width, Math.min(24, item.height * 0.4));
+        ctx.fillRect(item.x, item.y, item.width, headerH);
 
-        ctx.font = 'bold 11px monospace';
+        ctx.font = 'bold 10.5px monospace';
         ctx.fillStyle = '#ffffff';
         ctx.textAlign = 'left';
         ctx.textBaseline = 'middle';
-        ctx.fillText(item.name.slice(0, 20), item.x + 8, item.y + 12);
+        let zoneTitle = (item.name || '').trim();
+        const maxTitleW = Math.max(16, item.width - (item.locked ? 28 : 14));
+        while (zoneTitle.length > 3 && ctx.measureText(zoneTitle).width > maxTitleW) {
+          zoneTitle = `${zoneTitle.slice(0, -2)}…`;
+        }
+        ctx.fillText(zoneTitle, item.x + 8, item.y + headerH / 2);
 
-        if (item.height >= 40) {
+        if (item.height >= 44) {
           ctx.fillStyle = isDark ? '#94a3b8' : '#475569';
-          ctx.font = '10px monospace';
-          ctx.fillText(`${wM}m × ${hM}m (${Math.round(wM * hM)}m²)`, item.x + 8, item.y + 32);
+          ctx.font = '9.5px monospace';
+          ctx.fillText(`${wM}m × ${hM}m (${Math.round(wM * hM)}m²)`, item.x + 8, item.y + headerH + 12);
         }
 
-        if (includeProductCodes && item.skuCode && item.height >= 54) {
+        if (includeProductCodes && item.skuCode && item.height >= 58) {
           ctx.fillStyle = '#f97316';
-          ctx.font = 'bold 10px monospace';
-          ctx.fillText(`SKU: ${item.skuCode.slice(0, 18)}`, item.x + 8, item.y + 46);
+          ctx.font = 'bold 9.5px monospace';
+          ctx.fillText(item.skuCode.slice(0, 18), item.x + 8, item.y + headerH + 26);
         }
       }
 
       // Indicador de Bloqueio se aplicável
       if (item.locked) {
-        ctx.font = '11px sans-serif';
+        ctx.font = '10px sans-serif';
         ctx.textAlign = 'right';
         ctx.textBaseline = 'top';
-        ctx.fillText('🔒', item.x + item.width - 6, item.y + 6);
+        const lockY = item.internalPositions && item.internalPositions.length > 0 ? item.y - 16 : item.y + 4;
+        ctx.fillText('🔒', item.x + item.width - 4, lockY);
       }
 
       ctx.restore();
@@ -462,7 +496,7 @@ function drawWarehouseElements(
 }
 
 /**
- * Desenha células de posições internas da zona
+ * Desenha células de posições internas da zona sem sobreposição entre código, SKU e selo de reserva
  */
 function drawInternalCells(
   ctx: CanvasRenderingContext2D,
@@ -476,6 +510,7 @@ function drawInternalCells(
     const cellY = zone.y + (pos.relY ?? 0);
     const cellW = pos.relWidth ?? 25;
     const cellH = pos.relHeight ?? 25;
+    const isReserved = pos.status === 'reserved';
 
     // Cores de status
     let cellBg = isDark ? 'rgba(30, 41, 59, 0.7)' : 'rgba(241, 245, 249, 0.9)';
@@ -486,7 +521,7 @@ function drawInternalCells(
       cellBg = isDark ? 'rgba(5, 150, 105, 0.35)' : 'rgba(16, 185, 129, 0.25)';
       cellBorder = '#10b981';
       textColor = isDark ? '#34d399' : '#047857';
-    } else if (pos.status === 'reserved') {
+    } else if (isReserved) {
       cellBg = isDark ? 'rgba(217, 119, 6, 0.35)' : 'rgba(245, 158, 11, 0.25)';
       cellBorder = '#f59e0b';
       textColor = isDark ? '#fbbf24' : '#b45309';
@@ -496,26 +531,45 @@ function drawInternalCells(
     ctx.fillRect(cellX, cellY, cellW, cellH);
 
     ctx.strokeStyle = cellBorder;
-    ctx.lineWidth = 1;
+    ctx.lineWidth = isReserved ? 1.5 : 1;
     ctx.strokeRect(cellX, cellY, cellW, cellH);
 
-    // Texto de código da célula e SKU se habilitado e se couber
-    if (includeProductCodes && cellW >= 22 && cellH >= 14) {
-      const hasSku = Boolean(pos.sku && pos.sku.trim().length > 0);
-      const showSku = hasSku && cellW >= 48 && cellH >= 26;
-      ctx.font = 'bold 9px monospace';
-      ctx.fillStyle = textColor;
+    if (isReserved && cellW >= 56 && cellH >= 18) {
+      ctx.fillStyle = '#eab308';
+      ctx.fillRect(cellX + cellW - 25, cellY + 3, 22, 10);
+      ctx.font = 'bold 6.5px monospace';
+      ctx.fillStyle = '#0f172a';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText(
-        (pos.code || '').slice(0, 8),
-        cellX + cellW / 2,
-        showSku ? cellY + cellH * 0.35 : cellY + cellH / 2
-      );
-      if (showSku && pos.sku) {
-        ctx.font = '8px monospace';
-        ctx.fillStyle = isDark ? '#cbd5e1' : '#334155';
-        ctx.fillText(pos.sku.slice(0, 10), cellX + cellW / 2, cellY + cellH * 0.72);
+      ctx.fillText('RES', cellX + cellW - 14, cellY + 8);
+    }
+
+    // Texto de código da célula e linha secundária sem colidir com o selo RES
+    if (includeProductCodes && cellW >= 22 && cellH >= 13) {
+      const hasSecondary = Boolean((isReserved && pos.reservedStore) || (pos.sku && pos.sku.trim().length > 0));
+      const showSecondary = hasSecondary && cellW >= 36 && cellH >= 25;
+      const rightPad = isReserved && cellW >= 56 && cellH >= 18 ? 28 : 6;
+      const maxCodeW = Math.max(10, cellW - 4 - rightPad);
+
+      ctx.font = 'bold 8.5px monospace';
+      ctx.fillStyle = textColor;
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'top';
+      let codeTxt = (pos.code || '').trim();
+      while (codeTxt.length > 2 && ctx.measureText(codeTxt).width > maxCodeW) {
+        codeTxt = `${codeTxt.slice(0, -2)}…`;
+      }
+      ctx.fillText(codeTxt, cellX + 4, cellY + 4);
+
+      if (showSecondary) {
+        let subTxt = isReserved && pos.reservedStore ? pos.reservedStore.trim() : (pos.sku || '').trim();
+        ctx.font = '7.5px monospace';
+        ctx.fillStyle = isReserved ? (isDark ? '#fde047' : '#854d0e') : isDark ? '#cbd5e1' : '#334155';
+        const maxSubW = Math.max(10, cellW - 8);
+        while (subTxt.length > 2 && ctx.measureText(subTxt).width > maxSubW) {
+          subTxt = `${subTxt.slice(0, -2)}…`;
+        }
+        ctx.fillText(subTxt, cellX + 4, cellY + 15);
       }
     }
   }

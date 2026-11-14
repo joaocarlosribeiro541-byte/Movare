@@ -42,6 +42,11 @@ export const InternalPositionSchema = z.object({
   status: PositionStockStatusSchema.default('empty'),
   updatedAt: z.string().optional(),
   notes: z.string().optional(),
+  reservedStore: z.string().optional(),
+  reservedQuantity: z.number().finite().nonnegative().optional(),
+  reservedAt: z.string().optional(),
+  reservedBy: z.string().optional(),
+  reservedByEmail: z.string().optional(),
 });
 
 export const ZoneInternalLayoutSchema = z.object({
@@ -351,11 +356,22 @@ export function migrateBackupData(raw: unknown): {
           depthMeters: dMeters,
           sku: typeof p.sku === 'string' ? p.sku.trim() : undefined,
           description: typeof p.description === 'string' ? p.description.trim() : undefined,
+          model: typeof p.model === 'string' ? p.model.trim() : undefined,
+          supplier: typeof p.supplier === 'string' ? p.supplier.trim() : undefined,
+          volumesPerItem: typeof p.volumesPerItem === 'number' && p.volumesPerItem >= 0 ? p.volumesPerItem : undefined,
           quantity: typeof p.quantity === 'number' && p.quantity >= 0 ? p.quantity : undefined,
           unit: typeof p.unit === 'string' ? p.unit : 'UN',
           status: ['empty', 'occupied', 'reserved'].includes(p.status) ? p.status : (p.sku ? 'occupied' : 'empty'),
           updatedAt: typeof p.updatedAt === 'string' ? p.updatedAt : undefined,
           notes: typeof p.notes === 'string' ? p.notes : undefined,
+          reservedStore: typeof p.reservedStore === 'string' ? p.reservedStore.trim() : undefined,
+          reservedQuantity:
+            typeof p.reservedQuantity === 'number' && Number.isFinite(p.reservedQuantity) && p.reservedQuantity >= 0
+              ? p.reservedQuantity
+              : undefined,
+          reservedAt: typeof p.reservedAt === 'string' ? p.reservedAt : undefined,
+          reservedBy: typeof p.reservedBy === 'string' ? p.reservedBy.trim() : undefined,
+          reservedByEmail: typeof p.reservedByEmail === 'string' ? p.reservedByEmail.trim() : undefined,
         });
       }
 

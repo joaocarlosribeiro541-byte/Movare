@@ -332,6 +332,9 @@ export async function toggleRemotePositionReservation(
     elementId: string;
     positionId: string;
     reserved?: boolean;
+    reservedStore?: string;
+    reservedBy?: string;
+    reservedQuantity?: number;
   },
   client: SupabaseClient | null = supabase
 ): Promise<ToggleReservationResult> {
@@ -344,13 +347,28 @@ export async function toggleRemotePositionReservation(
   }
 
   try {
-    const { data, error } = await client.rpc('toggle_position_reservation', {
+    const rpcPayload: Record<string, unknown> = {
       p_map_id: CENTRAL_MAP_ID,
       p_area_id: params.areaId,
       p_element_id: params.elementId,
       p_position_id: params.positionId,
       p_reserved: params.reserved ?? null,
-    });
+    };
+    if (params.reservedStore && params.reservedStore.trim()) {
+      rpcPayload.p_reserved_store = params.reservedStore.trim();
+    }
+    if (params.reservedBy && params.reservedBy.trim()) {
+      rpcPayload.p_reserved_by = params.reservedBy.trim();
+    }
+    if (
+      typeof params.reservedQuantity === 'number' &&
+      Number.isFinite(params.reservedQuantity) &&
+      params.reservedQuantity > 0
+    ) {
+      rpcPayload.p_reserved_quantity = params.reservedQuantity;
+    }
+
+    const { data, error } = await client.rpc('toggle_position_reservation', rpcPayload);
 
     if (error) {
       const msg = error.message.toLowerCase();

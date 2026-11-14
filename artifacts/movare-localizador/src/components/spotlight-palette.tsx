@@ -281,13 +281,26 @@ export function SpotlightPalette({
 
             const posCode = pos.code || `P-${pos.shelfIndex ?? 1}-${pos.cellIndex ?? 1}`;
             const skuText = pos.sku || el.skuCode;
-            const statusLabel = pos.status === 'occupied' ? 'Ocupado' : pos.status === 'reserved' ? 'Reservado' : 'Disponível';
+            const statusLabel = pos.status === 'occupied'
+              ? 'Ocupado'
+              : pos.status === 'reserved'
+              ? `Reservado${pos.reservedStore ? ` · Loja ${pos.reservedStore}` : ''}${pos.reservedBy ? ` (${pos.reservedBy})` : ''}`
+              : 'Disponível';
+
+            const qtyLabel =
+              pos.status === 'reserved' && pos.reservedQuantity && pos.quantity
+                ? `(${pos.reservedQuantity}/${pos.quantity} ${pos.unit || 'un'})`
+                : pos.status === 'reserved' && pos.reservedQuantity
+                ? `(${pos.reservedQuantity} ${pos.unit || 'un'})`
+                : pos.quantity
+                ? `(${pos.quantity} ${pos.unit || 'un'})`
+                : '';
 
             list.push({
               id: `pos-${el.id}-${pos.id}`,
               kind: 'position',
               title: `${posCode} ${skuText ? `· ${skuText}` : ''}`,
-              subtitle: `${area.name} · ${el.name} · ${statusLabel} ${pos.quantity ? `(${pos.quantity} un)` : ''}`,
+              subtitle: `${area.name} · ${el.name} · ${statusLabel} ${qtyLabel}`.trim(),
               badge: posCode,
               iconType: 'position',
               areaId: area.id,

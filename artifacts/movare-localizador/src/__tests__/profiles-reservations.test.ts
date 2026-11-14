@@ -26,6 +26,7 @@ import {
   buildSearchCatalog,
   countReservedPositionsInAreas,
   filterSearchCatalog,
+  formatReservationDateTime,
   resolveStatusAfterUnreserve,
   togglePositionReservationInElement,
 } from '../wms-operations';
@@ -841,5 +842,113 @@ describe('MOVARE — PERFIS DE ACESSO, RESERVAS E BUSCA OPERACIONAL', () => {
       email_confirmed: true,
       last_sign_in_at: '2026-05-01T14:00:00.000Z',
     });
+  });
+
+  it('12. Deve gravar e limpar loja, quantidade parcial/total, data e responsável na reserva, buscar por loja e sincronizar com a RPC', async () => {
+    const areas = createSampleWarehouseAreas();
+    const zone = areas[0].elements[0] as DrawingElement;
+    const fixedIso = '2026-11-14T08:30:00.000Z';
+
+    // pos-1 tem quantity = 4 em estoque; reserva parcial de 3 UN deve manter quantity = 4 e gravar reservedQuantity = 3
+    const reservedEl = togglePositionReservationInElement(zone, 'pos-1', true, {
+      store: 'Loja Centro',
+      reservedAt: fixedIso,
+      reservedBy: 'Carlos Assistência',
+      reservedByEmail: 'carlos@movare.com.br',
+      quantity: 3,
+    });
+
+    const reservedPos = reservedEl.internalPositions?.[0];
+    expect(reservedPos?.status).toBe('reserved');
+    expect(reservedPos?.quantity).toBe(4);
+    expect(reservedPos?.reservedQuantity).toBe(3);
+    expect(reservedPos?.reservedStore).toBe('Loja Centro');
+    expect(reservedPos?.reservedAt).toBe(fixedIso);
+    expect(reservedPos?.reservedBy).toBe('Carlos Assistência');
+    expect(reservedPos?.reservedByEmail).toBe('carlos@movare.com.br');
+
+    // Se tentar reservar quantidade maior que o estoque (99 > 4), limita ao estoque disponível (4)
+    const clampedEl = togglePositionReservationInElement(zone, 'pos-1', true, {
+      store: 'Loja Centro',
+      reservedAt: fixedIso,
+      reservedBy: 'Carlos Assistência',
+      quantity: 99,
+    });
+    expect(clampedEl.internalPositions?.[0].quantity).toBe(4);
+    expect(clampedEl.internalPositions?.[0].reservedQuantity).toBe(4);
+
+    // Formatação legível em pt-BR e fallback seguro
+    expect(formatReservationDateTime(fixedIso)).toMatch(/\d{2}\/\d{2}\/2026/);
+    expect(formatReservationDateTime(undefined)).toBe('Data não registrada');
+
+    // Busca no catálogo por loja ou responsável encontra a posição reservada com estoque e qtd reservada
+    const updatedAreas: FloorArea[] = [
+      { ...areas[0], elements: [reservedEl] },
+      areas[1],
+    ];
+    const catalog = buildSearchCatalog(updatedAreas);
+    const byStore = filterSearchCatalog(catalog, { query: 'Loja Centro', filterType: 'reserved' });
+    expect(byStore).toHaveLength(1);
+    expect(byStore[0].positionId).toBe('pos-1');
+    expect(byStore[0].reservedStore).toBe('Loja Centro');
+    expect(byStore[0].reservedBy).toBe('Carlos Assistência');
+    expect(byStore[0].quantity).toBe(4);
+    expect(byStore[0].reservedQuantity).toBe(3);
+
+    const byResponsible = filterSearchCatalog(catalog, { query: 'Carlos Assistência' });
+    expect(byResponsible.some((item) => item.positionId === 'pos-1')).toBe(true);
+
+    // Ao remover a reserva, limpa os metadados de reserva (incluindo reservedQuantity) e restaura 'occupied' mantendo quantity = 4
+    const unreservedEl = togglePositionReservationInElement(reservedEl, 'pos-1', false);
+    const clearedPos = unreservedEl.internalPositions?.[0];
+    expect(clearedPos?.status).toBe('occupied');
+    expect(clearedPos?.quantity).toBe(4);
+    expect(clearedPos?.reservedQuantity).toBeUndefined();
+    expect(clearedPos?.reservedStore).toBeUndefined();
+    expect(clearedPos?.reservedAt).toBeUndefined();
+    expect(clearedPos?.reservedBy).toBeUndefined();
+    expect(clearedPos?.reservedByEmail).toBeUndefined();
+
+    // RPC envia p_reserved_store, p_reserved_by e p_reserved_quantity quando fornecidos
+    const rpcClient = {
+      rpc: vi.fn().mockResolvedValue({
+        data: {
+          status: 'ok',
+          next_status: 'reserved',
+          id: CENTRAL_MAP_ID,
+          data: updatedAreas,
+          version: 8,
+          updated_at: fixedIso,
+          updated_by: 'assist-1',
+          updated_by_email: 'carlos@movare.com.br',
+        },
+        error: null,
+      }),
+    } as unknown as SupabaseClient;
+
+    const rpcRes = await toggleRemotePositionReservation(
+      {
+        areaId: 'wh-1',
+        elementId: 'zone-gel',
+        positionId: 'pos-1',
+        reserved: true,
+        reservedStore: 'Filial 04',
+        reservedBy: 'Carlos Assistência',
+        reservedQuantity: 3,
+      },
+      rpcClient
+    );
+
+    expect(rpcClient.rpc).toHaveBeenCalledWith('toggle_position_reservation', {
+      p_map_id: CENTRAL_MAP_ID,
+      p_area_id: 'wh-1',
+      p_element_id: 'zone-gel',
+      p_position_id: 'pos-1',
+      p_reserved: true,
+      p_reserved_store: 'Filial 04',
+      p_reserved_by: 'Carlos Assistência',
+      p_reserved_quantity: 3,
+    });
+    expect(rpcRes.ok).toBe(true);
   });
 });

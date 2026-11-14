@@ -586,3 +586,214 @@ button { cursor: pointer; }
   animation: movare-red-outline-pulse 1.05s ease-in-out infinite;
 }
 
+@keyframes movare-grid-reveal {
+  0% {
+    opacity: 0;
+    transform: scale(0.94);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes movare-draw-stroke {
+  0% {
+    stroke-dashoffset: var(--dash-length, 600);
+    opacity: 0.2;
+  }
+  20% {
+    opacity: 1;
+  }
+  100% {
+    stroke-dashoffset: 0;
+    opacity: 1;
+  }
+}
+
+@keyframes movare-extrude-left {
+  0% {
+    opacity: 0;
+    transform: translate3d(14px, -6px, 0) scale(0.94);
+  }
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+@keyframes movare-extrude-right {
+  0% {
+    opacity: 0;
+    transform: translate3d(12px, 8px, 0) scale(0.94);
+  }
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+@keyframes movare-face-pop {
+  0% {
+    opacity: 0;
+    transform: translate3d(-6px, 6px, 0) scale(0.95);
+  }
+  65% {
+    opacity: 1;
+    transform: translate3d(0, -1px, 0) scale(1.015);
+  }
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+@keyframes movare-sheen-sweep {
+  0% {
+    opacity: 0;
+    transform: translate3d(-140%, 0, 0) skewX(-22deg);
+  }
+  20% {
+    opacity: 0.9;
+  }
+  80% {
+    opacity: 0.9;
+  }
+  100% {
+    opacity: 0;
+    transform: translate3d(240%, 0, 0) skewX(-22deg);
+  }
+}
+
+@keyframes movare-scan-beam {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, -56px, 0);
+  }
+  20% {
+    opacity: 0.85;
+  }
+  80% {
+    opacity: 0.85;
+  }
+  100% {
+    opacity: 0;
+    transform: translate3d(0, 64px, 0);
+  }
+}
+
+@keyframes movare-echo-pulse {
+  0% {
+    opacity: 0;
+    transform: scale(0.92);
+  }
+  35% {
+    opacity: 0.45;
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.28);
+  }
+}
+
+@keyframes movare-wordmark-rise {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 12px, 0) scale(0.97);
+  }
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+@keyframes movare-tag-slide {
+  0% {
+    opacity: 0;
+    transform: translate3d(16px, 0, 0) scale(0.94);
+  }
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+.movare-anim-grid {
+  animation: movare-grid-reveal 0.9s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.movare-anim-stroke {
+  stroke-dasharray: var(--dash-length, 600);
+  stroke-dashoffset: var(--dash-length, 600);
+  animation: movare-draw-stroke var(--draw-duration, 1.05s) cubic-bezier(0.22, 1, 0.36, 1) var(--draw-delay, 0s) forwards;
+}
+
+.movare-anim-extrude-left {
+  opacity: 0;
+  animation: movare-extrude-left 0.72s cubic-bezier(0.16, 1, 0.3, 1) 0.55s forwards;
+}
+
+.movare-anim-extrude-right {
+  opacity: 0;
+  animation: movare-extrude-right 0.72s cubic-bezier(0.16, 1, 0.3, 1) 0.7s forwards;
+}
+
+.movare-anim-face-pop {
+  opacity: 0;
+  transform-origin: center;
+  animation: movare-face-pop 0.78s cubic-bezier(0.16, 1, 0.3, 1) 0.85s forwards;
+}
+
+.movare-anim-sheen {
+  opacity: 0;
+  animation: movare-sheen-sweep 1.25s cubic-bezier(0.22, 1, 0.36, 1) 1.55s forwards;
+}
+
+.movare-anim-scan {
+  opacity: 0;
+  animation: movare-scan-beam 1.6s cubic-bezier(0.4, 0, 0.2, 1) 1.8s infinite;
+}
+
+.movare-anim-echo-1 {
+  opacity: 0;
+  transform-origin: center;
+  animation: movare-echo-pulse 2.4s cubic-bezier(0.16, 1, 0.3, 1) 1.1s infinite;
+}
+
+.movare-anim-echo-2 {
+  opacity: 0;
+  transform-origin: center;
+  animation: movare-echo-pulse 2.4s cubic-bezier(0.16, 1, 0.3, 1) 1.9s infinite;
+}
+
+.movare-anim-wordmark {
+  opacity: 0;
+  animation: movare-wordmark-rise 0.75s cubic-bezier(0.16, 1, 0.3, 1) 1.25s forwards;
+}
+
+.movare-anim-tag {
+  opacity: 0;
+  animation: movare-tag-slide 0.6s cubic-bezier(0.16, 1, 0.3, 1) 1.65s forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .movare-anim-grid,
+  .movare-anim-stroke,
+  .movare-anim-extrude-left,
+  .movare-anim-extrude-right,
+  .movare-anim-face-pop,
+  .movare-anim-wordmark,
+  .movare-anim-tag {
+    animation: none !important;
+    opacity: 1 !important;
+    transform: none !important;
+    stroke-dashoffset: 0 !important;
+  }
+  .movare-anim-sheen,
+  .movare-anim-scan,
+  .movare-anim-echo-1,
+  .movare-anim-echo-2 {
+    animation: none !important;
+    opacity: 0 !important;
+  }
+}

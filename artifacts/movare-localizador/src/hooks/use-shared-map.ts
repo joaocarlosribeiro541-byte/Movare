@@ -17,7 +17,10 @@ import {
   saveAreas,
   type LocalExistingDataInspection,
 } from '../local-store';
-import { togglePositionReservationInElement } from '../wms-operations';
+import {
+  togglePositionReservationInElement,
+  type ReservationMetadata,
+} from '../wms-operations';
 
 export type CloudSyncStatus =
   | 'unconfigured'
@@ -471,7 +474,8 @@ export function useSharedMap({
     async (
       elementId: string,
       positionId: string,
-      allowed: boolean
+      allowed: boolean,
+      reservationMeta?: ReservationMetadata
     ): Promise<{ changed: boolean; nextStatus?: 'reserved' | 'occupied' | 'empty'; synced?: boolean; error?: string }> => {
       if (!allowed) {
         return { changed: false };
@@ -491,7 +495,12 @@ export function useSharedMap({
           ...area,
           elements: area.elements.map((el) => {
             if (el.id !== elementId) return el;
-            const updatedEl = togglePositionReservationInElement(el, positionId);
+            const updatedEl = togglePositionReservationInElement(
+              el,
+              positionId,
+              undefined,
+              reservationMeta
+            );
             if (updatedEl !== el) {
               didChange = true;
               nextStatus = updatedEl.internalPositions?.find((p) => p.id === positionId)?.status;
@@ -530,6 +539,9 @@ export function useSharedMap({
           elementId,
           positionId,
           reserved: nextStatus === 'reserved',
+          reservedStore: nextStatus === 'reserved' ? reservationMeta?.store : undefined,
+          reservedBy: nextStatus === 'reserved' ? reservationMeta?.reservedBy : undefined,
+          reservedQuantity: nextStatus === 'reserved' ? reservationMeta?.quantity : undefined,
         });
 
         if (res.ok) {
