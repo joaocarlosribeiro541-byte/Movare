@@ -1,0 +1,446 @@
+PROJETO MOVARE — REDESIGN VISUAL E SISTEMA DE PERFIS DE ACESSO
+
+OBJETIVO
+
+Evoluir visualmente o aplicativo Movare existente, modernizando
+completamente a interface, os menus, a navegação e a experiência de cada
+categoria de usuário.
+
+O trabalho deve ser realizado exclusivamente sobre o projeto original:
+
+https://github.com/joaocarlosribeiro541-byte/Movare
+
+O objetivo NÃO é criar um novo aplicativo. É transformar a experiência
+visual do sistema atual, preservando sua arquitetura e todas as
+funcionalidades existentes.
+
+1. REGRA ABSOLUTA: PRESERVAÇÃO DO PROJETO
+
+Antes de qualquer implementação:
+
+1.  Analise integralmente a estrutura do repositório.
+2.  Leia os componentes existentes e entenda suas dependências.
+3.  Entenda os sistemas de autenticação, permissões, mapa, produtos,
+    posições internas e sincronização.
+4.  Identifique quais componentes podem ser reutilizados.
+5.  Apresente um plano de implementação indicando os arquivos que
+    pretende modificar.
+
+NÃO faça alterações antes de concluir essa análise.
+
+É proibido:
+
+-   Recriar o aplicativo do zero.
+-   Criar um segundo aplicativo.
+-   Substituir o editor atual por outro.
+-   Remover funcionalidades existentes.
+-   Alterar o modelo de dados do mapa sem necessidade comprovada.
+-   Modificar a estrutura de armazenamento dos produtos.
+-   Alterar dimensões, coordenadas ou posições dos elementos do mapa.
+-   Alterar a integração existente com Supabase.
+-   Criar outro banco de dados.
+-   Criar novas tabelas, migrations, triggers, buckets ou estruturas de
+    armazenamento.
+-   Modificar políticas RLS existentes.
+-   Alterar configurações do Vercel.
+-   Substituir dependências sem justificativa técnica.
+
+Trabalhe preferencialmente na camada visual, nos componentes de
+navegação e na lógica de apresentação e autorização dos perfis.
+
+2. NOVO PADRÃO VISUAL
+
+Desenvolver uma identidade visual moderna, limpa, dinâmica e
+profissional.
+
+Referências conceituais:
+
+-   Sistemas WMS modernos.
+-   Interfaces de logística e gestão de armazéns.
+-   Aplicações SaaS profissionais.
+-   Painéis operacionais simplificados.
+-   Design responsivo com prioridade para dispositivos móveis.
+
+Características desejadas:
+
+-   Interface minimalista.
+-   Hierarquia visual clara.
+-   Menos elementos desnecessários na tela.
+-   Ícones intuitivos.
+-   Tipografia moderna e legível.
+-   Cards organizados.
+-   Menus simplificados.
+-   Espaçamento consistente.
+-   Animações suaves e discretas.
+-   Excelente contraste e legibilidade.
+-   Layout adaptável a celulares, tablets e computadores.
+
+Criar um padrão visual único para todo o aplicativo.
+
+Preservar a identidade da marca MOVARE e os recursos visuais que já
+fazem parte do projeto.
+
+Não modificar a representação geométrica do mapa, suas coordenadas,
+dimensões ou comportamento de interação.
+
+3. SISTEMA DE CATEGORIAS DE USUÁRIOS
+
+Implementar quatro categorias distintas:
+
+1.  ADMIN
+2.  ASSISTÊNCIA
+3.  CONFERENTE
+4.  VISITANTE
+
+Cada categoria deverá possuir uma interface própria, com menus,
+ferramentas e informações adequados à sua finalidade.
+
+3.1 ADMINISTRADOR
+
+O administrador mantém acesso total ao sistema.
+
+Deve preservar todas as funcionalidades atuais:
+
+-   Edição completa do mapa.
+-   Criação e exclusão de zonas.
+-   Edição de produtos.
+-   Gerenciamento de posições internas.
+-   Alteração de dimensões e escalas.
+-   Gerenciamento de galpões.
+-   Ferramentas de movimentação e desenho.
+-   Gerenciamento de camadas.
+-   Backup e restauração.
+-   Configurações.
+-   Sincronização.
+-   Gerenciamento dos demais perfis, caso seja possível com a estrutura
+    de permissões já existente.
+
+A interface administrativa deve ser completa, mas organizada.
+
+Agrupar ferramentas por finalidade, evitando excesso de botões e menus
+simultâneos.
+
+Não remover nenhuma ferramenta administrativa existente.
+
+3.2 CONFERENTE
+
+Criar uma interface operacional dedicada à localização de produtos.
+
+O objetivo principal é permitir que o conferente encontre rapidamente
+qualquer item armazenado.
+
+A experiência deverá priorizar:
+
+-   Campo de pesquisa de destaque.
+-   Busca por código.
+-   Busca por SKU.
+-   Busca por nome do produto.
+-   Busca por modelo.
+-   Busca por fornecedor.
+-   Filtros por categoria.
+-   Resultados apresentados em cards objetivos.
+-   Identificação clara do galpão.
+-   Identificação da zona.
+-   Código da posição interna.
+-   Localização visual do produto no mapa.
+-   Ação para centralizar o mapa na localização encontrada.
+
+O resultado da pesquisa deverá apresentar prioritariamente:
+
+1.  Nome do produto.
+2.  Código ou SKU.
+3.  Galpão.
+4.  Zona.
+5.  Posição ou endereço interno.
+6.  Situação do item.
+7.  Botão ou ação para localizar no mapa.
+
+Ao selecionar um resultado, o sistema deve direcionar a visualização
+para a posição correspondente no mapa, utilizando as funções de
+navegação e seleção já existentes.
+
+A interface deve ser simples e rápida, sem ferramentas de desenho,
+edição ou administração.
+
+O conferente terá acesso somente de leitura.
+
+3.3 ASSISTÊNCIA
+
+Criar uma interface operacional voltada para consulta e classificação de
+itens reservados.
+
+A Assistência poderá:
+
+-   Consultar o mapa.
+-   Pesquisar produtos.
+-   Localizar itens.
+-   Visualizar informações dos produtos.
+-   Marcar posições como RESERVADAS.
+-   Retirar a classificação de RESERVADO, quando necessário.
+
+Não poderá:
+
+-   Desenhar ou movimentar elementos do mapa.
+-   Criar ou excluir zonas.
+-   Alterar dimensões.
+-   Editar códigos de localização.
+-   Modificar informações estruturais dos produtos.
+-   Administrar usuários.
+-   Modificar configurações.
+
+Identidade visual de itens reservados
+
+Aproveitar obrigatoriamente a estrutura existente:
+
+PositionStockStatus = ‘empty’ | ‘occupied’ | ‘reserved’
+
+Não criar outro campo ou modelo de reserva.
+
+Quando uma posição estiver reservada:
+
+-   Aplicar destaque amarelo.
+-   Apresentar etiqueta RESERVADO.
+-   Utilizar ícone visual de reserva.
+-   Destacar a informação no card do produto.
+-   Preservar a identificação mesmo após atualizar a página.
+-   Sincronizar a alteração pelo mecanismo de armazenamento existente.
+
+O destaque deve aparecer tanto no mapa quanto nos cards de visualização.
+
+A reserva deve ser feita sobre a posição interna correta, sem alterar o
+status de outras posições pertencentes à mesma zona.
+
+IMPORTANTE: a Assistência só poderá alterar o status de reserva se as
+permissões de gravação já existentes no Supabase autorizarem essa
+operação. Não contorne RLS, não utilize privilégios administrativos no
+navegador e não altere políticas do banco. Caso a estrutura atual não
+permita essa operação com segurança, interrompa essa parte e apresente o
+impedimento técnico.
+
+3.4 VISITANTE
+
+O visitante terá uma experiência extremamente simplificada.
+
+Objetivo: consultar informações sem precisar aprender a utilizar o
+editor.
+
+Disponibilizar:
+
+-   Visualização do mapa.
+-   Pesquisa de produtos.
+-   Consulta de informações básicas.
+-   Identificação do galpão.
+-   Identificação da zona.
+-   Identificação da localização.
+-   Visualização do status do item.
+-   Identificação visual de itens reservados.
+
+Não disponibilizar ferramentas administrativas, ferramentas de edição ou
+classificação de reservas.
+
+A interface deve ser limpa, intuitiva e de fácil utilização.
+
+O visitante não precisa criar conta nem fazer login.
+
+4. AUTENTICAÇÃO E AUTORIZAÇÃO
+
+Utilizar exclusivamente a autenticação existente no Supabase.
+
+Analisar antes de modificar:
+
+-   src/lib/auth.ts
+-   src/hooks/use-auth.ts
+-   src/components/auth/
+-   src/components/permissions/
+
+Atualmente, o projeto possui os papéis admin e visitor.
+
+Expandir a lógica para reconhecer os novos perfis, sem comprometer a
+autenticação atual.
+
+Utilizar exclusivamente fontes confiáveis de autorização:
+
+-   app_metadata protegido.
+-   Tabela admin_users existente, caso seu schema e suas políticas
+    permitam armazenar e consultar os novos papéis.
+
+Nunca utilizar user_metadata como fonte de privilégios.
+
+Não permitir cadastro público com privilégios especiais.
+
+Não criar tabelas ou alterar o banco.
+
+Se a estrutura atual de admin_users ou suas restrições não permitirem os
+novos papéis, não inventar uma solução nem modificar o banco. Apresentar
+exatamente o que está impedindo a implementação.
+
+A autorização deve ser aplicada também às ações e mutações, não apenas à
+visibilidade dos botões.
+
+5. SISTEMA DE INTERFACE ADAPTÁVEL POR PERFIL
+
+Criar uma experiência que identifique o perfil autenticado e apresente
+automaticamente o layout correspondente.
+
+Cada usuário deve encontrar somente os recursos relevantes à sua
+atividade.
+
+O sistema deve manter:
+
+-   Identidade visual consistente.
+-   Navegação intuitiva.
+-   Menus organizados.
+-   Cards padronizados.
+-   Componentes reutilizáveis.
+-   Responsividade.
+-   Boa experiência em telas pequenas.
+
+Evitar duplicar o editor inteiro para cada categoria.
+
+Preferir uma estrutura de componentes compartilhados, com permissões e
+apresentação específicas por perfil.
+
+6. PRESERVAÇÃO DO MAPA E DOS DADOS
+
+Este é um requisito crítico.
+
+Preservar integralmente:
+
+-   FloorArea[].
+-   DrawingElement.
+-   InternalPosition.
+-   InternalLayout.
+-   Produtos.
+-   SKUs.
+-   Modelos.
+-   Fornecedores.
+-   Quantidades.
+-   Códigos de localização.
+-   Coordenadas.
+-   Dimensões.
+-   Escalas.
+-   Galpões.
+-   Camadas.
+-   Status de estoque.
+
+Não executar qualquer migração ou conversão desnecessária.
+
+Não sobrescrever o mapa central.
+
+Não inicializar mapas vazios.
+
+Não modificar o mecanismo de backup.
+
+O Supabase existente continua sendo a fonte oficial dos dados.
+
+7. SINCRONIZAÇÃO
+
+Preservar integralmente:
+
+-   src/hooks/use-shared-map.ts
+-   src/lib/map-service.ts
+-   Controle otimista de versão.
+-   Supabase Realtime.
+-   Tratamento de conflitos.
+-   Persistência local auxiliar.
+-   Migração inicial existente.
+
+As novas interfaces devem consumir os dados do sistema compartilhado
+atual.
+
+Não implementar um segundo mecanismo de sincronização.
+
+Não realizar consultas ou gravações desnecessárias.
+
+8. ARQUIVOS E COMPONENTES
+
+Priorizar o reaproveitamento dos componentes existentes:
+
+-   pages/editor.tsx
+-   components/top-command-bar.tsx
+-   components/floating-action-dock.tsx
+-   components/selection-inspector.tsx
+-   components/product-quick-card.tsx
+-   components/auth/admin-panel-dialog.tsx
+-   components/permissions/permission-guard.tsx
+
+Novos componentes visuais poderão ser criados quando realmente
+necessários, preferencialmente dentro da estrutura de diretórios já
+existente.
+
+Não duplicar componentes ou lógica sem justificativa.
+
+9. TESTES OBRIGATÓRIOS
+
+Antes de concluir, testar:
+
+1.  Login administrativo.
+2.  Acesso público de visitante.
+3.  Acesso de conferente.
+4.  Acesso de assistência.
+5.  Restrição de edição para conferente.
+6.  Restrição de edição para visitante.
+7.  Restrição de ferramentas estruturais para assistência.
+8.  Classificação de posição como reservada.
+9.  Remoção da classificação de reserva.
+10. Persistência da reserva após recarregar.
+11. Sincronização da reserva entre dispositivos, caso autorizada pela
+    política atual.
+12. Pesquisa por código e SKU.
+13. Pesquisa por nome e modelo.
+14. Centralização do mapa no item pesquisado.
+15. Preservação dos dados e funcionalidades administrativas.
+16. Responsividade em celulares e computadores.
+17. Build de produção.
+18. Typecheck e testes automatizados existentes.
+
+Se alguma função existente deixar de funcionar, corrigir antes de
+finalizar.
+
+10. CONTROLE DE ALTERAÇÕES
+
+Trabalhar exclusivamente em uma branch de desenvolvimento.
+
+Não alterar diretamente a main.
+
+Antes de modificar:
+
+-   Registrar o estado inicial do projeto.
+-   Identificar os arquivos que serão alterados.
+-   Apresentar o plano.
+
+Depois de implementar:
+
+-   Apresentar a lista completa de arquivos modificados.
+-   Explicar o motivo de cada alteração.
+-   Apresentar o diff.
+-   Informar os testes realizados e seus resultados.
+-   Identificar eventuais limitações relacionadas ao Supabase.
+
+Não mesclar automaticamente na main.
+
+Aguardar aprovação explícita do proprietário do projeto.
+
+11. CRITÉRIO FINAL DE ACEITAÇÃO
+
+A atualização será considerada concluída somente quando:
+
+-   O aplicativo possuir uma identidade visual moderna e consistente.
+-   Cada categoria de usuário possuir uma experiência adequada.
+-   O administrador mantiver todas as funcionalidades.
+-   O conferente localizar produtos de maneira simples e rápida.
+-   A Assistência puder classificar itens como reservados, se autorizado
+    pelo banco existente.
+-   O visitante possuir visualização simplificada.
+-   O mapa continuar íntegro.
+-   A autenticação continuar funcionando.
+-   O Supabase continuar sendo o banco existente.
+-   A sincronização continuar funcionando.
+-   Nenhuma funcionalidade original tiver sido removida ou comprometida.
+
+REGRA FINAL:
+
+MODERNIZE A EXPERIÊNCIA. NÃO RECONSTRUA O SISTEMA.
+
+Faça somente as alterações necessárias para alcançar os objetivos
+solicitados.

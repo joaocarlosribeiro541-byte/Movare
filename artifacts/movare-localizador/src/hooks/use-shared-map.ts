@@ -6,6 +6,7 @@ import {
   sanitizeAreasForRender,
   saveCentralMap,
   subscribeToCentralMap,
+  toggleRemotePositionReservation,
   validateCentralMapPayload,
   type RealtimeConnectionStatus,
   type SharedMapRecord,
@@ -16,6 +17,7 @@ import {
   saveAreas,
   type LocalExistingDataInspection,
 } from '../local-store';
+import { togglePositionReservationInElement } from '../wms-operations';
 
 export type CloudSyncStatus =
   | 'unconfigured'
@@ -122,9 +124,11 @@ export function useSharedMap({
   const [pendingChangesCount, setPendingChangesCount] = useState(0);
   const [remoteUpdateNotice, setRemoteUpdateNotice] = useState<RemoteUpdateNotice | null>(null);
   const [conflictState, setConflictState] = useState<MapConflictState | null>(null);
+  const [reservationSyncing, setReservationSyncing] = useState(false);
 
   const hasUnsavedChangesRef = useRef(false);
   const isSavingRef = useRef(false);
+  const isReservationSavingRef = useRef(false);
   const mutationSeqRef = useRef(0);
   const prevConnRef = useRef<RealtimeConnectionStatus>(connectionStatus);
   const activeIdRef = useRef(activeId);
@@ -463,6 +467,89 @@ export function useSharedMap({
     [recordAreas]
   );
 
+  const togglePositionReservation = useCallback(
+    async (
+      elementId: string,
+      positionId: string,
+      allowed: boolean
+    ): Promise<{ changed: boolean; nextStatus?: 'reserved' | 'occupied' | 'empty'; synced?: boolean; error?: string }> => {
+      if (!allowed) {
+        return { changed: false };
+      }
+      if (isReservationSavingRef.current) {
+        return { changed: false, error: 'Sincronização de reserva já está em andamento.' };
+      }
+
+      let nextStatus: 'reserved' | 'occupied' | 'empty' | undefined;
+      let didChange = false;
+      const targetAreaId = activeIdRef.current;
+      const previousAreas = areasRef.current;
+
+      const next = previousAreas.map((area) => {
+        if (area.id !== targetAreaId) return area;
+        return {
+          ...area,
+          elements: area.elements.map((el) => {
+            if (el.id !== elementId) return el;
+            const updatedEl = togglePositionReservationInElement(el, positionId);
+            if (updatedEl !== el) {
+              didChange = true;
+              nextStatus = updatedEl.internalPositions?.find((p) => p.id === positionId)?.status;
+            }
+            return updatedEl;
+          }),
+        };
+      });
+
+      if (!didChange || !nextStatus) {
+        return { changed: false };
+      }
+
+      if (isAdmin) {
+        recordAreas(next);
+        return { changed: true, nextStatus, synced: !isSupabaseConfigured };
+      }
+
+      // Assistência Técnica sem Supabase ativo -> persiste no armazenamento local auxiliar
+      if (!isSupabaseConfigured) {
+        areasRef.current = next;
+        setAreas(next);
+        void saveAreas(next);
+        return { changed: true, nextStatus, synced: true };
+      }
+
+      // Assistência Técnica com Supabase ativo -> aplica otimisticamente e grava atomicamente via RPC dedicada
+      areasRef.current = next;
+      setAreas(next);
+      isReservationSavingRef.current = true;
+      setReservationSyncing(true);
+
+      try {
+        const res = await toggleRemotePositionReservation({
+          areaId: targetAreaId,
+          elementId,
+          positionId,
+          reserved: nextStatus === 'reserved',
+        });
+
+        if (res.ok) {
+          applyAuthoritativeRemoteRecord(res.record, { resetHistory: false });
+          return { changed: true, nextStatus: res.nextStatus, synced: true };
+        }
+
+        // Em caso de falha na nuvem, reverte para o estado anterior confiável
+        areasRef.current = previousAreas;
+        setAreas(previousAreas);
+        onNotify?.(res.error);
+        return { changed: false, synced: false, error: res.error };
+      } finally {
+        isReservationSavingRef.current = false;
+        setReservationSyncing(false);
+      }
+    },
+    [applyAuthoritativeRemoteRecord, isAdmin, onNotify, recordAreas]
+  );
+
   const undo = useCallback((): boolean => {
     if (!isAdmin) {
       onNotify?.('Modo Visitante: histórico de edição restrito a administradores.');
@@ -612,6 +699,7 @@ export function useSharedMap({
     future,
     recordAreas,
     patchActive,
+    togglePositionReservation,
     undo,
     redo,
     connectionStatus,
@@ -636,5 +724,6 @@ export function useSharedMap({
     dismissConflict,
     resolveConflictReloadRemote,
     resolveConflictPublishLocalDraft,
+    reservationSyncing,
   };
 }

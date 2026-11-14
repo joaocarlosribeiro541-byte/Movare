@@ -1,14 +1,12 @@
 import { useState, useEffect, useMemo, useRef, type KeyboardEvent } from 'react';
 import {
-  Search, X, MapPin, Tag, Box, ArrowRight, CornerDownLeft,
-  Maximize2, Plus, Download, Upload, Layers, Sun, Moon,
-  Ruler, HelpCircle, Sparkles, Check, Hash
+  Search, X, MapPin, Tag, ArrowRight, CornerDownLeft,
+  Sparkles, BookmarkCheck
 } from 'lucide-react';
 import {
   PRODUCT_SIZES, PRODUCT_CATEGORIES,
-  type FloorArea, type DrawingElement, type ProductSize
+  type FloorArea
 } from '../editor-model';
-import type { PositionStockStatus } from '../zone-internal-positions';
 
 export type SpotlightCommandAction =
   | 'new_warehouse'
@@ -49,6 +47,7 @@ export type SpotlightItem = {
   sku?: string;
   model?: string;
   supplier?: string;
+  status?: 'empty' | 'occupied' | 'reserved';
   actionId?: SpotlightCommandAction;
 };
 
@@ -303,6 +302,7 @@ export function SpotlightPalette({
               sku: skuText,
               model: pos.model || el.model,
               supplier: pos.supplier || el.supplier,
+              status: pos.status,
             });
           }
         }
@@ -534,6 +534,8 @@ export function SpotlightPalette({
                       className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${
                         item.kind === 'action'
                           ? isDark ? 'bg-sky-500/20 text-sky-400' : 'bg-sky-100 text-sky-600'
+                          : item.status === 'reserved'
+                          ? isDark ? 'bg-amber-500/25 text-amber-400' : 'bg-amber-100 text-amber-700'
                           : item.kind === 'position'
                           ? isDark ? 'bg-emerald-500/20 text-emerald-400' : 'bg-emerald-100 text-emerald-600'
                           : isDark ? 'bg-orange-500/20 text-orange-400' : 'bg-orange-100 text-orange-600'
@@ -541,6 +543,8 @@ export function SpotlightPalette({
                     >
                       {item.kind === 'action' ? (
                         <Sparkles className="w-4 h-4" />
+                      ) : item.status === 'reserved' ? (
+                        <BookmarkCheck className="w-4 h-4" />
                       ) : item.kind === 'position' ? (
                         <Tag className="w-4 h-4" />
                       ) : (
@@ -553,6 +557,11 @@ export function SpotlightPalette({
                         <span className="font-semibold text-xs sm:text-sm truncate">
                           {item.title}
                         </span>
+                        {item.status === 'reserved' && (
+                          <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded border border-amber-400/60 bg-amber-400/20 text-amber-400 shrink-0">
+                            RESERVADO
+                          </span>
+                        )}
                         {item.badge && (
                           <span
                             className={`text-[10px] font-mono px-1.5 py-0.5 rounded border shrink-0 ${

@@ -34,6 +34,7 @@ import {
 import { alignGroupElements } from '../physics';
 import { ReadOnlyNoticeBanner } from './permissions/permission-guard';
 import { ZoneInternalPositionsManager } from './zone-positions-manager';
+import type { UserRole } from '../lib/auth';
 
 type InspectorTab = 'summary' | 'positions' | 'adjust';
 
@@ -49,6 +50,7 @@ type SelectionInspectorProps = {
   isolatedSpaceId: string | null;
   isDark: boolean;
   isAdmin: boolean;
+  userRole?: UserRole;
   isMobile?: boolean;
   onReplaceItem: (updated: DrawingElement) => void;
   onPatchElements: (mapper: (elements: DrawingElement[]) => DrawingElement[], toastMsg?: string) => void;
@@ -116,6 +118,7 @@ export function SelectionInspector({
   isolatedSpaceId,
   isDark,
   isAdmin,
+  userRole = 'visitor',
   isMobile = false,
   onReplaceItem,
   onPatchElements,
@@ -181,9 +184,9 @@ export function SelectionInspector({
   return (
     <div className="flex flex-col h-full justify-between gap-3">
       <div className="space-y-3">
-        {/* BANNER SOMENTE LEITURA PARA VISITANTE */}
+        {/* BANNER SOMENTE LEITURA PARA PERFIS NÃO-ADMIN */}
         {!isAdmin && (
-          <ReadOnlyNoticeBanner isDark={isDark} onRequestLogin={onRequestLogin} />
+          <ReadOnlyNoticeBanner isDark={isDark} role={userRole} onRequestLogin={onRequestLogin} />
         )}
 
         {/* SELEÇÃO MÚLTIPLA & GRUPO (COMPACTO) */}
@@ -500,6 +503,7 @@ export function SelectionInspector({
                 onSelectPosition={onSelectPosition}
                 isDark={isDark}
                 readOnly
+                userRole={userRole}
               />
             )}
           </div>
@@ -703,6 +707,7 @@ export function SelectionInspector({
                 onSelectPosition={onSelectPosition}
                 isDark={isDark}
                 readOnly={false}
+                userRole={userRole}
               />
             )}
 

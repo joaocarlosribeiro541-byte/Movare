@@ -8,7 +8,8 @@ import {
   Maximize2, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Tag, Target,
   Magnet, Sliders, PanelRightClose, PanelRightOpen, Shield, ShieldCheck,
   CheckSquare, Square,  AlignLeft, AlignCenter, Users, Eye,
-  Camera as CameraIcon, Cloud, CloudOff, LogIn, UploadCloud, Loader2
+  Camera as CameraIcon, Cloud, CloudOff, LogIn, UploadCloud, Loader2,
+  BookmarkCheck, ClipboardCheck
 } from 'lucide-react';
 import {
   initialAreas, parseBackup, createId, DEFAULT_SCALE_RATIO, DEFAULT_WIDTH_METERS, DEFAULT_HEIGHT_METERS,
@@ -23,13 +24,18 @@ import {
   resolveGroupPhysics,
   alignGroupElements,
 } from '../physics';
+import { ROLE_METADATA } from '../lib/auth';
 import { useAuth } from '../hooks/use-auth';
 import { useSharedMap } from '../hooks/use-shared-map';
 import { AuthDialog } from '../components/auth/auth-dialog';
 import { AdminPanelDialog } from '../components/auth/admin-panel-dialog';
+import type { AccessPanelTab } from '../components/auth/profile-menu';
 import { MigrationDialog } from '../components/auth/migration-dialog';
 import { ConflictDialog } from '../components/auth/conflict-dialog';
-import { ReadOnlyNoticeBanner } from '../components/permissions/permission-guard';
+import {
+  canUserPersistReservations,
+  canUserSeeReservationAction,
+} from '../components/permissions/permission-guard';
 import { CADRuler } from '../components/cad-ruler';
 import { Minimap } from '../components/minimap';
 import { WMSSearchDialog, type SearchResult } from '../components/wms-search-dialog';
@@ -37,7 +43,6 @@ import { ScaleCalibrationDialog } from '../components/scale-calibration-dialog';
 import { WarehouseSizeDialog } from '../components/warehouse-size-dialog';
 import { LayersManagerDialog } from '../components/layers-manager-dialog';
 import { MovareSplashScreen } from '../components/movare-splash-screen';
-import { ZoneInternalPositionsManager } from '../components/zone-positions-manager';
 import { SpotlightPalette, type SpotlightCommandAction } from '../components/spotlight-palette';
 import { FloatingActionDock } from '../components/floating-action-dock';
 import { TopCommandBar } from '../components/top-command-bar';
@@ -45,6 +50,7 @@ import { KeyboardShortcutsDialog } from '../components/keyboard-shortcuts-dialog
 import { PngExportDialog } from '../components/png-export-dialog';
 import { ProductQuickCard } from '../components/product-quick-card';
 import { SelectionInspector } from '../components/selection-inspector';
+import { ConferentePanel } from '../components/conferente-panel';
 import { WarehouseManagerDialog, type WarehouseManagerMode } from '../components/warehouse-manager-dialog';
 import {
   buildNewWarehouse,
@@ -60,6 +66,10 @@ import {
   applyVolumePresetToZone,
   generateStablePositionId,
 } from '../zone-internal-positions';
+import {
+  countReservedPositionsInAreas,
+  type SearchCatalogItem,
+} from '../wms-operations';
 
 type Tool = 'select' | 'move' | 'rectangle' | 'divider' | 'corridor' | 'measure' | 'pan';
 type Camera = { x: number; y: number; scale: number };
@@ -92,9 +102,17 @@ export default function Editor() {
   const [activeId, setActiveId] = useState(initialAreas[0].id);
   const [toast, setToast] = useState('');
 
-  // Autenticação e permissões reais via Supabase Auth
+  // Autenticação e permissões reais via Supabase Auth + sistema de cargos
   const auth = useAuth();
+  const userRole = auth.role;
   const isAdmin = auth.isAdmin;
+  const isAssistencia = auth.isAssistencia;
+  const isConferente = auth.isConferente;
+  const canReservePositions = auth.canReservePositions;
+  const canUseConferentePanel = auth.canUseConferentePanel;
+  const canManageRoles = auth.canManageRoles;
+  const isCommonUser = auth.isCommonUser;
+  const isVisitor = auth.isVisitor;
 
   // Mapa central compartilhado com Realtime e controle otimista de concorrência
   const sharedMap = useSharedMap({
@@ -112,6 +130,7 @@ export default function Editor() {
     future,
     recordAreas,
     patchActive,
+    togglePositionReservation,
     undo,
     redo,
   } = sharedMap;
@@ -124,7 +143,7 @@ export default function Editor() {
   const worldWidth = bounds.widthPx;
   const worldHeight = bounds.heightPx;
 
-  const [tool, setTool] = useState<Tool>('select');
+  const [tool, setTool] = useState<Tool>(isAdmin ? 'select' : 'pan');
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const selectedId = selectedIds[0] ?? null;
   const selected = activeArea?.elements?.find((item) => item.id === selectedId) ?? null;
@@ -297,8 +316,22 @@ export default function Editor() {
     'search' | 'scale' | 'warehouse-size' | 'layers' | 'spotlight' | 'shortcuts' | 'rack-gen' | 'png-export' |
     'auth' | 'access-panel' | 'warehouses' | null
   >(null);
+  const [accessPanelTab, setAccessPanelTab] = useState<AccessPanelTab>('overview');
+  const openAccessPanel = useCallback((tab: AccessPanelTab = 'overview') => {
+    setAccessPanelTab(tab);
+    setModal('access-panel');
+  }, []);
+
+  useEffect(() => {
+    if (auth.isAuthenticated) {
+      setMobileMenuOpen(false);
+    }
+  }, [auth.isAuthenticated]);
+
   const [warehouseManagerMode, setWarehouseManagerMode] = useState<WarehouseManagerMode>('list');
   const [warehouseManagerEditId, setWarehouseManagerEditId] = useState<string | null>(null);
+  const [searchInitialFilter, setSearchInitialFilter] = useState<'all' | 'codes' | 'zones' | 'products' | 'reserved'>('all');
+  const [conferentePanelOpen, setConferentePanelOpen] = useState(false);
 
   // Modo de Edição Individual de Espaço (Sub-Mapa / Foco Isolado)
   const [isolatedSpaceId, setIsolatedSpaceId] = useState<string | null>(null);
@@ -310,6 +343,64 @@ export default function Editor() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const canvasSizeRef = useRef({ width: 0, height: 0 });
 
+  const reservedCount = useMemo(() => countReservedPositionsInAreas(areas), [areas]);
+  const canSeeReserve = canUserSeeReservationAction(userRole, auth.permissions);
+  const canPersistReserve = canUserPersistReservations(
+    userRole,
+    isAdmin,
+    auth.isConfigured,
+    auth.permissions
+  );
+
+  const handleToggleReservePosition = useCallback(
+    async (elementId: string, positionId: string) => {
+      if (!canPersistReserve) {
+        setToast('Seu cargo atual não possui permissão para reservar posições.');
+        return;
+      }
+      const res = await togglePositionReservation(elementId, positionId, canPersistReserve);
+      if (res.changed) {
+        if (res.nextStatus === 'reserved') {
+          setToast(
+            !isAdmin && canPersistReserve && auth.isConfigured
+              ? 'Posição marcada como RESERVADO (sincronizado na nuvem).'
+              : 'Posição marcada como RESERVADO.'
+          );
+        } else {
+          setToast(
+            !isAdmin && canPersistReserve && auth.isConfigured
+              ? 'Reserva removida (sincronizado na nuvem).'
+              : 'Marcação de reserva removida.'
+          );
+        }
+      }
+    },
+    [auth.isConfigured, canPersistReserve, isAdmin, togglePositionReservation]
+  );
+
+  // Abre painel operacional automaticamente quando o cargo possui permissão de Conferente
+  useEffect(() => {
+    setConferentePanelOpen(canUseConferentePanel);
+  }, [canUseConferentePanel]);
+
+  // Notifica usuário conectado caso um Administrador altere seu cargo/permissões em tempo real
+  const prevCargoKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!auth.isAuthenticated || !auth.user?.id) {
+      prevCargoKeyRef.current = null;
+      return;
+    }
+    const nextKey = `${auth.user.id}:${auth.cargoId ?? 'common'}:${auth.permissions.canEditMap}:${auth.permissions.canReservePositions}:${auth.permissions.canUseConferentePanel}:${auth.permissions.canManageRoles}`;
+    if (prevCargoKeyRef.current && prevCargoKeyRef.current !== nextKey) {
+      setToast(
+        auth.cargoName
+          ? `Cargo atualizado automaticamente para "${auth.cargoName}".`
+          : 'Seu cargo operacional foi removido (modo Usuário Comum).'
+      );
+    }
+    prevCargoKeyRef.current = nextKey;
+  }, [auth.cargoId, auth.cargoName, auth.isAuthenticated, auth.permissions, auth.user?.id]);
+
   // Alternador de Tema
   const toggleTheme = useCallback(() => {
     setTheme((prev) => {
@@ -319,16 +410,16 @@ export default function Editor() {
     });
   }, []);
 
-  // Garante transição segura para modo somente leitura caso o usuário não seja administrador
+  // Garante transição segura para modo de consulta/visualização caso o usuário não seja administrador
   useEffect(() => {
     if (!isAdmin) {
       setTool((current) =>
-        current === 'move' || current === 'rectangle' || current === 'divider' || current === 'corridor'
-          ? 'select'
-          : current
+        current === 'pan' || current === 'measure' ? current : 'pan'
       );
       setFreeMoveMode(false);
       setIsMultiSelectMode(false);
+      setDesktopSidebarOpen(false);
+      setMobileDrawerOpen(false);
       setModal((current) =>
         current === 'delete' ||
         current === 'rename' ||
@@ -341,8 +432,10 @@ export default function Editor() {
           ? null
           : current
       );
+    } else {
+      setTool((current) => (current === 'pan' && !selectedId ? 'select' : current));
     }
-  }, [isAdmin]);
+  }, [isAdmin, selectedId]);
 
   // FitPlan com controle seguro de referência
   const fitPlan = useCallback(() => {
@@ -430,8 +523,8 @@ export default function Editor() {
 
   const selectToolSafe = useCallback(
     (nextTool: Tool) => {
-      if (!isAdmin && (nextTool === 'move' || nextTool === 'rectangle' || nextTool === 'divider' || nextTool === 'corridor')) {
-        setToast('Modo Visitante: ferramentas de edição restritas a administradores.');
+      if (!isAdmin && nextTool !== 'pan' && nextTool !== 'measure') {
+        setToast('Edição e seleção avançada restritas ao perfil Administrador.');
         return;
       }
       if (nextTool !== 'pan') {
@@ -480,7 +573,7 @@ export default function Editor() {
       }
 
       switch (e.key.toLowerCase()) {
-        case 'v': setTool('select'); setMeasureLine(null); break;
+        case 'v': if (isAdmin) { setTool('select'); setMeasureLine(null); } break;
         case 'm': if (isAdmin) { setTool('move'); setMeasureLine(null); } break;
         case 'h': setTool('pan'); setMeasureLine(null); break;
         case 'r': if (isAdmin) { setTool('rectangle'); setMeasureLine(null); } break;
@@ -494,7 +587,7 @@ export default function Editor() {
           setSelectedPositionId(null);
           setHighlightId(null);
           setMeasureLine(null);
-          setTool('select');
+          setTool(isAdmin ? 'select' : 'pan');
           setModal(null);
           setMobileMenuOpen(false);
           break;
@@ -1869,7 +1962,9 @@ export default function Editor() {
         onCreateNewArea={() => openWarehouseManager('create')}
         onOpenWarehouseManager={() => openWarehouseManager('list')}
         bounds={bounds}
+        scaleRatio={scaleRatio}
         onOpenResizeDialog={() => isAdmin && setModal('warehouse-size')}
+        onOpenScaleDialog={() => isAdmin && setModal('scale')}
         tool={tool}
         onSelectTool={(t) => {
           selectToolSafe(t);
@@ -1893,7 +1988,25 @@ export default function Editor() {
         onUndo={undo}
         canRedo={isAdmin && future.length > 0}
         onRedo={redo}
-        onOpenSpotlight={() => setModal('spotlight')}
+        onOpenSpotlight={() => {
+          if (isAdmin) {
+            setModal('spotlight');
+          } else {
+            setSearchInitialFilter('all');
+            setModal('search');
+          }
+        }}
+        onOpenSearch={() => {
+          setSearchInitialFilter('all');
+          setModal('search');
+        }}
+        onOpenReservedSearch={() => {
+          setSearchInitialFilter('reserved');
+          setModal('search');
+        }}
+        reservedCount={reservedCount}
+        onToggleConferentePanel={() => setConferentePanelOpen((prev) => !prev)}
+        conferentePanelOpen={conferentePanelOpen}
         onOpenLayers={() => setModal('layers')}
         onOpenShortcuts={() => setModal('shortcuts')}
         onOpenPngExport={() => setModal('png-export')}
@@ -1905,6 +2018,15 @@ export default function Editor() {
         sidebarOpen={desktopSidebarOpen}
         onToggleSidebar={() => setDesktopSidebarOpen(!desktopSidebarOpen)}
         onOpenMobileMenu={() => setMobileMenuOpen(true)}
+        userRole={userRole}
+        cargoName={auth.cargoName}
+        cargoColor={auth.cargoColor}
+        profile={auth.profile}
+        permissions={auth.permissions}
+        canManageRoles={canManageRoles}
+        canReserve={canReservePositions}
+        canUseConferente={canUseConferentePanel}
+        isCommonUser={isCommonUser}
         isAdmin={isAdmin}
         userEmail={auth.user?.email ?? null}
         connectionStatus={sharedMap.connectionStatus}
@@ -1912,7 +2034,9 @@ export default function Editor() {
         mapVersion={sharedMap.mapVersion}
         hasUnsavedChanges={sharedMap.hasUnsavedChanges}
         onSaveToCloud={() => void sharedMap.flushSaveToCloud()}
-        onOpenAccessPanel={() => setModal('access-panel')}
+        onOpenAccessPanel={(tab = 'overview') => openAccessPanel(tab)}
+        onRefreshAccess={auth.refreshRole}
+        onLogout={auth.logout}
         onOpenLogin={() => setModal('auth')}
       />
       <input
@@ -2422,10 +2546,12 @@ export default function Editor() {
                                         ? 'rgba(239, 68, 68, 0.32)'
                                         : isPosSelected
                                         ? 'rgba(56, 189, 248, 0.25)'
+                                        : isReserved
+                                        ? isDark
+                                          ? 'rgba(250, 204, 21, 0.34)'
+                                          : 'rgba(250, 204, 21, 0.42)'
                                         : isOccupied
                                         ? 'rgba(34, 197, 94, 0.22)'
-                                        : isReserved
-                                        ? 'rgba(234, 179, 8, 0.22)'
                                         : isDark
                                         ? 'rgba(255, 255, 255, 0.05)'
                                         : 'rgba(0, 0, 0, 0.04)';
@@ -2434,17 +2560,19 @@ export default function Editor() {
                                         ? '#ef4444'
                                         : isPosSelected
                                         ? '#38bdf8'
+                                        : isReserved
+                                        ? isDark
+                                          ? '#facc15'
+                                          : '#ca8a04'
                                         : isOccupied
                                         ? '#22c55e'
-                                        : isReserved
-                                        ? '#eab308'
                                         : color;
 
                                       const posStrokeOpacity = isPosHighlighted || isPosSelected || isOccupied || isReserved ? 0.95 : 0.45;
                                       const posReactKey = `${rendered.id}-${pos.id || 'pos'}-${posIdx}`;
 
                                       return (
-                                        <g key={posReactKey} className={tool === 'select' && isItemInteractive ? 'cursor-pointer' : 'pointer-events-none'}>
+                                        <g key={posReactKey} className={(tool === 'select' || tool === 'pan') && isItemInteractive ? 'cursor-pointer' : 'pointer-events-none'}>
                                           <rect
                                             x={posX}
                                             y={posY}
@@ -2454,7 +2582,7 @@ export default function Editor() {
                                             fill={posFill}
                                             stroke={posStroke}
                                             strokeOpacity={posStrokeOpacity}
-                                            strokeWidth={isPosHighlighted ? 3 : isPosSelected ? 2.5 : 1}
+                                            strokeWidth={isPosHighlighted ? 3 : isPosSelected ? 2.5 : isReserved ? 2 : 1}
                                             strokeDasharray={pos.status === 'empty' && !isPosSelected && !isPosHighlighted ? '3 2' : undefined}
                                             pointerEvents={(tool === 'select' || tool === 'pan') && isItemInteractive ? 'all' : 'none'}
                                             onPointerDown={(e) => {
@@ -2483,7 +2611,7 @@ export default function Editor() {
                                                   : isOccupied
                                                   ? '#4ade80'
                                                   : isReserved
-                                                  ? '#fde047'
+                                                  ? isDark ? '#fef08a' : '#854d0e'
                                                   : isDark
                                                   ? '#94a3b8'
                                                   : '#64748b'
@@ -2495,6 +2623,36 @@ export default function Editor() {
                                             </text>
                                           )}
 
+                                          {/* Selo visual explícito RESERVADO em amarelo */}
+                                          {isReserved && relWidth >= 14 && relHeight >= 12 && (
+                                            relWidth >= 58 && relHeight >= 22 ? (
+                                              <g transform={`translate(${posX + relWidth - 48}, ${posY + 3})`} pointerEvents="none">
+                                                <rect width={45} height={11} rx={2.5} fill="#eab308" />
+                                                <text
+                                                  x={22.5}
+                                                  y={8}
+                                                  textAnchor="middle"
+                                                  fontSize={6.5}
+                                                  fontFamily="'JetBrains Mono', monospace"
+                                                  fontWeight="900"
+                                                  fill="#0f172a"
+                                                >
+                                                  RESERVADO
+                                                </text>
+                                              </g>
+                                            ) : (
+                                              <circle
+                                                cx={posX + relWidth - 5}
+                                                cy={posY + 5}
+                                                r={3.2}
+                                                fill="#facc15"
+                                                stroke="#0f172a"
+                                                strokeWidth={0.8}
+                                                pointerEvents="none"
+                                              />
+                                            )
+                                          )}
+
                                           {/* Detalhes de Estoque: Qtd e Unidade se houver espaço vertical */}
                                           {pos.status !== 'empty' && relWidth >= 50 && relHeight >= 26 && (
                                             <text
@@ -2502,10 +2660,10 @@ export default function Editor() {
                                               y={posY + 22}
                                               fontSize={8}
                                               fontFamily="'JetBrains Mono', monospace"
-                                              fill={isDark ? '#cbd5e1' : '#475569'}
+                                              fill={isReserved ? (isDark ? '#fde047' : '#854d0e') : isDark ? '#cbd5e1' : '#475569'}
                                               pointerEvents="none"
                                             >
-                                              {pos.quantity ? `${pos.quantity} ${pos.unit || 'UN'}` : ''}
+                                              {pos.quantity ? `${pos.quantity} ${pos.unit || 'UN'}` : isReserved ? 'RES' : ''}
                                             </text>
                                           )}
                                         </g>
@@ -2543,34 +2701,37 @@ export default function Editor() {
 
                                 {/* Informações da Zona e Células de Produtos */}
                                 <g pointerEvents="none">
-                                  {rendered.internalPositions && rendered.internalPositions.length > 0 ? (
-                                    // Header compacto da Zona com Posições Internas
-                                    <g transform={`translate(${baseZoneX + 6}, ${baseZoneY + 12})`}>
-                                      <rect
-                                        x={-2}
-                                        y={-10}
-                                        width={Math.min(
-                                          Math.max(20, baseZoneW - 8),
-                                          Math.max(90, (rendered.name || '').length * 6.5 + 40)
-                                        )}
-                                        height={16}
-                                        rx={3}
-                                        fill={isDark ? 'rgba(15, 23, 42, 0.85)' : 'rgba(255, 255, 255, 0.85)'}
-                                        stroke={color}
-                                        strokeWidth={0.8}
-                                      />
-                                      <text
-                                        x={2}
-                                        y={1}
-                                        fontSize={9}
-                                        fontWeight="bold"
-                                        fill={isDark ? '#f8fafc' : '#0f172a'}
-                                        fontFamily="'JetBrains Mono', monospace"
-                                      >
-                                        {(rendered.name || '').slice(0, 24)} [{rendered.internalPositions.length} pos]
-                                      </text>
-                                    </g>
-                                  ) : baseZoneW >= 75 && baseZoneH >= 45 ? (
+                                  {rendered.internalPositions && rendered.internalPositions.length > 0 ? (() => {
+                                    const zoneReservedCount = rendered.internalPositions.filter((p) => p.status === 'reserved').length;
+                                    const labelStr = `${(rendered.name || '').slice(0, 22)} [${rendered.internalPositions.length} pos]${zoneReservedCount > 0 ? ` · ${zoneReservedCount} RES` : ''}`;
+                                    return (
+                                      <g transform={`translate(${baseZoneX + 6}, ${baseZoneY + 12})`}>
+                                        <rect
+                                          x={-2}
+                                          y={-10}
+                                          width={Math.min(
+                                            Math.max(24, baseZoneW - 8),
+                                            Math.max(96, labelStr.length * 5.8 + 14)
+                                          )}
+                                          height={16}
+                                          rx={3}
+                                          fill={zoneReservedCount > 0 ? (isDark ? 'rgba(66, 32, 6, 0.92)' : 'rgba(254, 249, 195, 0.96)') : isDark ? 'rgba(15, 23, 42, 0.85)' : 'rgba(255, 255, 255, 0.85)'}
+                                          stroke={zoneReservedCount > 0 ? '#eab308' : color}
+                                          strokeWidth={zoneReservedCount > 0 ? 1.1 : 0.8}
+                                        />
+                                        <text
+                                          x={2}
+                                          y={1}
+                                          fontSize={9}
+                                          fontWeight="bold"
+                                          fill={zoneReservedCount > 0 ? (isDark ? '#fde047' : '#854d0e') : isDark ? '#f8fafc' : '#0f172a'}
+                                          fontFamily="'JetBrains Mono', monospace"
+                                        >
+                                          {labelStr}
+                                        </text>
+                                      </g>
+                                    );
+                                  })() : baseZoneW >= 75 && baseZoneH >= 45 ? (
                                     <>
                                       <text
                                         x={baseZoneX + 8}
@@ -3026,11 +3187,31 @@ export default function Editor() {
                 </g>
               </svg>
 
+              {/* PAINEL OPERACIONAL DO CONFERENTE (CONSULTA RÁPIDA SOMENTE LEITURA) */}
+              {canUseConferentePanel && (
+                <ConferentePanel
+                  isOpen={conferentePanelOpen}
+                  onToggleOpen={() => setConferentePanelOpen((prev) => !prev)}
+                  areas={areas}
+                  activeAreaId={activeId}
+                  isDark={isDark}
+                  onLocateItem={(item: SearchCatalogItem) => {
+                    handleNavigateToSearchResult({
+                      ...item,
+                      isPosition: item.isPosition,
+                    });
+                    if (typeof window !== 'undefined' && window.innerWidth < 768) {
+                      setConferentePanelOpen(false);
+                    }
+                  }}
+                />
+              )}
+
               {/* DOCK FLUTUANTE INFERIOR 4.0 (FERRAMENTAS CAD & WMS) */}
               <FloatingActionDock
                 tool={tool}
                 onSelectTool={(t) => {
-                  if (!isAdmin && (t === 'move' || t === 'rectangle' || t === 'divider' || t === 'corridor')) {
+                  if (!isAdmin && t !== 'pan' && t !== 'measure') {
                     selectToolSafe(t);
                     return;
                   }
@@ -3066,7 +3247,15 @@ export default function Editor() {
                 onRedo={redo}
                 isDark={isDark}
                 isAdmin={isAdmin}
-                onOpenSpotlight={() => setModal('spotlight')}
+                userRole={userRole}
+                onOpenSpotlight={() => {
+                  if (isAdmin) {
+                    setModal('spotlight');
+                  } else {
+                    setSearchInitialFilter('all');
+                    setModal('search');
+                  }
+                }}
               />
 
               {/* MINIMAPA FIXO NA PARTE SUPERIOR (ACOMPANHA NAVEGAÇÃO E ZOOM SEM ATRAPALHAR) */}
@@ -3125,6 +3314,10 @@ export default function Editor() {
                   areaName={activeArea.name}
                   isDark={isDark}
                   isAdmin={isAdmin}
+                  canSeeReservationAction={canSeeReserve}
+                  canPersistReservation={canPersistReserve}
+                  reservationBusy={sharedMap.reservationSyncing}
+                  shiftRightForPanel={canUseConferentePanel && conferentePanelOpen}
                   isDragging={isDragging}
                   onClose={() => {
                     setSelectedId(null);
@@ -3142,6 +3335,9 @@ export default function Editor() {
                     } else {
                       navigateToPoint(selected.x + selected.width / 2, selected.y + selected.height / 2, 1.4);
                     }
+                  }}
+                  onToggleReservePosition={(elId, posId) => {
+                    void handleToggleReservePosition(elId, posId);
                   }}
                   onSwitchToEdit={
                     isAdmin
@@ -3215,6 +3411,7 @@ export default function Editor() {
                 isolatedSpaceId={isolatedSpaceId}
                 isDark={isDark}
                 isAdmin={isAdmin}
+                userRole={userRole}
                 onReplaceItem={replaceItem}
                 onPatchElements={(mapper, toastMsg) => {
                   patchActive((a) => ({ ...a, elements: mapper(a.elements) }));
@@ -3348,6 +3545,7 @@ export default function Editor() {
                   isolatedSpaceId={isolatedSpaceId}
                   isDark={isDark}
                   isAdmin={isAdmin}
+                  userRole={userRole}
                   isMobile
                   onReplaceItem={replaceItem}
                   onPatchElements={(mapper, toastMsg) => {
@@ -3565,21 +3763,35 @@ export default function Editor() {
         <div className="flex items-center gap-4">
           <span className="text-slate-500 text-[10px]">
             {isAdmin
-              ? 'V: Selecionar · L: Travar Objeto · R: Zonas · P: Porta-Paletes · M: Medir · Ctrl+K: Buscar'
-              : 'V: Selecionar · H: Mover Mapa · M: Medir · Ctrl+K: Buscar'}
+              ? 'V: Selecionar · L: Travar Objeto · R: Zonas · M: Mover · T: Medir · Ctrl+K: Buscar'
+              : 'Arraste para navegar · Toque no item para visualizar · Ctrl+K: Buscar'}
           </span>
           <button
             type="button"
-            onClick={() => setModal('access-panel')}
+            onClick={() => openAccessPanel('overview')}
             className={`inline-flex items-center gap-1 px-2 py-0.5 rounded border text-[10px] font-semibold transition-colors cursor-pointer ${
               isAdmin
                 ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20'
-                : 'border-sky-500/40 bg-sky-500/10 text-sky-400 hover:bg-sky-500/20'
+                : isAssistencia
+                ? 'border-amber-500/40 bg-amber-500/10 text-amber-400 hover:bg-amber-500/20'
+                : isConferente
+                ? 'border-sky-500/40 bg-sky-500/10 text-sky-400 hover:bg-sky-500/20'
+                : 'border-slate-600/50 bg-slate-500/10 text-slate-300 hover:bg-slate-500/20'
             }`}
             title="Abrir Central de Acesso & Sincronização"
           >
-            {isAdmin ? <ShieldCheck className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
-            <span>{isAdmin ? 'Admin' : 'Visitante'}</span>
+            {isAdmin ? (
+              <ShieldCheck className="w-3 h-3" />
+            ) : isAssistencia ? (
+              <BookmarkCheck className="w-3 h-3" />
+            ) : isConferente ? (
+              <ClipboardCheck className="w-3 h-3" />
+            ) : (
+              <Eye className="w-3 h-3" />
+            )}
+            <span>
+              {auth.cargoName || (isCommonUser ? 'Comum' : ROLE_METADATA[userRole].shortLabel)}
+            </span>
             {sharedMap.connectionStatus === 'connected' ? (
               <Cloud className="w-3 h-3 text-emerald-400" />
             ) : (
@@ -3601,8 +3813,8 @@ export default function Editor() {
         </div>
       )}
 
-      {/* DRAWER MENU RÁPIDO MOBILE */}
-      {mobileMenuOpen && (
+      {/* DRAWER MENU RÁPIDO MOBILE (APENAS VISITANTE; LOGADOS USAM O ÍCONE DE PERFIL RETRÁTIL) */}
+      {mobileMenuOpen && !auth.isAuthenticated && (
         <div className="fixed inset-0 z-50 flex flex-col justify-end bg-black/70 backdrop-blur-xs">
           <div
             className={`w-full max-h-[80vh] rounded-t-2xl border-t shadow-2xl p-4 overflow-y-auto ${
@@ -3626,12 +3838,17 @@ export default function Editor() {
                   <div className="flex items-center gap-2 min-w-0">
                     {isAdmin ? (
                       <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
+                    ) : isAssistencia ? (
+                      <BookmarkCheck className="w-4 h-4 text-amber-400 shrink-0" />
+                    ) : isConferente ? (
+                      <ClipboardCheck className="w-4 h-4 text-sky-400 shrink-0" />
                     ) : (
-                      <Shield className="w-4 h-4 text-sky-400 shrink-0" />
+                      <Shield className="w-4 h-4 text-slate-400 shrink-0" />
                     )}
                     <div className="min-w-0">
                       <div className="font-bold text-slate-100 truncate">
-                        {isAdmin ? 'Administrador' : 'Visitante (Somente Leitura)'}
+                        {auth.cargoName ||
+                          (isCommonUser ? 'Usuário Comum (aguardando cargo)' : ROLE_METADATA[userRole].label)}
                       </div>
                       {auth.user?.email && (
                         <div className="text-[10px] font-mono text-slate-400 truncate">
@@ -3689,7 +3906,7 @@ export default function Editor() {
                     <span>Sincronização</span>
                   </button>
 
-                  {isAdmin ? (
+                  {auth.isAuthenticated ? (
                     <button
                       type="button"
                       onClick={() => {
@@ -3698,7 +3915,7 @@ export default function Editor() {
                       }}
                       className="py-1.5 px-2.5 rounded-lg bg-rose-500/15 text-rose-300 border border-rose-500/30 font-semibold flex items-center justify-center gap-1.5"
                     >
-                      <span>Sair Admin</span>
+                      <span>Sair ({ROLE_METADATA[userRole].shortLabel})</span>
                     </button>
                   ) : (
                     <button
@@ -3710,163 +3927,198 @@ export default function Editor() {
                       className="py-1.5 px-2.5 rounded-lg bg-orange-600 hover:bg-orange-500 text-white font-bold flex items-center justify-center gap-1.5"
                     >
                       <LogIn className="w-3.5 h-3.5" />
-                      <span>Entrar Admin</span>
+                      <span>Entrar no Sistema</span>
                     </button>
                   )}
                 </div>
               </div>
 
-              {/* Seção 1: Busca */}
+              {/* Seção 1: Busca & Perfil Operacional */}
               <div className="space-y-1.5">
                 <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Busca WMS</span>
-                <div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setMobileMenuOpen(false);
-                      setModal('search');
-                    }}
-                    className="w-full flex items-center gap-2 p-2.5 rounded-xl bg-slate-800/80 hover:bg-slate-800 text-slate-200 font-semibold"
-                  >
-                    <Search className="w-4 h-4 text-orange-400 shrink-0" />
-                    <span>Buscar Espaço ou SKU (Ctrl+K)</span>
-                  </button>
-                </div>
-              </div>
-
-              {/* Seção 2: Gestão do Galpão & Medição */}
-              <div className="space-y-1.5 pt-1 border-t border-slate-800">
-                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Espaço & Medidas</span>
                 <div className="space-y-1.5">
                   <button
                     type="button"
                     onClick={() => {
                       setMobileMenuOpen(false);
-                      setModal('layers');
+                      setSearchInitialFilter('all');
+                      setModal('search');
                     }}
-                    className="w-full flex items-center justify-between p-2.5 rounded-xl bg-slate-800/70 hover:bg-slate-800 text-slate-200 font-semibold"
+                    className="w-full flex items-center gap-2 p-2.5 rounded-xl bg-slate-800/80 hover:bg-slate-800 text-slate-200 font-semibold"
                   >
-                    <div className="flex items-center gap-2.5">
-                      <Layers className="w-4 h-4 text-orange-400 shrink-0" />
-                      <span>Camadas & Foco Individual por Espaço</span>
-                    </div>
+                    <Search className="w-4 h-4 text-orange-400 shrink-0" />
+                    <span>Buscar Produto, Código ou SKU</span>
                   </button>
 
-                  {isAdmin && (
-                    <>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setMobileMenuOpen(false);
-                          setModal('warehouse-size');
-                        }}
-                        className="w-full flex items-center justify-between p-2.5 rounded-xl bg-slate-800/70 hover:bg-slate-800 text-slate-200 font-semibold"
-                      >
-                        <div className="flex items-center gap-2.5">
-                          <Maximize2 className="w-4 h-4 text-orange-400 shrink-0" />
-                          <span>Tamanho do Galpão ({bounds.widthMeters}m × {bounds.heightMeters}m)</span>
-                        </div>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setMobileMenuOpen(false);
-                          setModal('scale');
-                        }}
-                        className="w-full flex items-center justify-between p-2.5 rounded-xl bg-slate-800/70 hover:bg-slate-800 text-slate-200 font-semibold"
-                      >
-                        <div className="flex items-center gap-2.5">
-                          <Ruler className="w-4 h-4 text-orange-400 shrink-0" />
-                          <span>Calibrar Escala CAD (1m = {scaleRatio}px)</span>
-                        </div>
-                      </button>
-                    </>
-                  )}
-                </div>
-              </div>
-
-              {/* Seção 3: Galpões & Arquivo */}
-              <div className="space-y-1.5 pt-1 border-t border-slate-800">
-                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Galpões & Backup</span>
-                <div className="grid grid-cols-2 gap-2">
-                  {isAdmin && (
-                    <>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setMobileMenuOpen(false);
-                          openWarehouseManager('list');
-                        }}
-                        className="col-span-2 p-2.5 rounded-xl bg-slate-800/90 hover:bg-slate-800 text-slate-100 font-semibold flex items-center justify-center gap-2 border border-slate-700/80"
-                      >
-                        <Warehouse className="w-4 h-4 text-orange-400" />
-                        <span>Gerenciar Galpões (Criar / Editar / Excluir)</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setMobileMenuOpen(false);
-                          openWarehouseManager('edit', activeArea.id);
-                        }}
-                        className="p-2 rounded-lg bg-slate-800 text-slate-300 font-medium flex items-center justify-center gap-1.5"
-                      >
-                        <Pencil className="w-3.5 h-3.5 text-orange-400" />
-                        <span>Editar Galpão</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setMobileMenuOpen(false);
-                          openWarehouseManager('create');
-                        }}
-                        className="p-2 rounded-lg bg-slate-800 text-slate-300 font-medium flex items-center justify-center gap-1.5"
-                      >
-                        <Plus className="w-3.5 h-3.5 text-emerald-400" />
-                        <span>Novo Galpão</span>
-                      </button>
-                    </>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setMobileMenuOpen(false);
-                      exportBackup();
-                    }}
-                    className={`p-2 rounded-lg bg-slate-800 text-slate-300 font-medium flex items-center justify-center gap-1.5 ${
-                      !isAdmin ? 'col-span-2' : ''
-                    }`}
-                  >
-                    <ArrowDownToLine className="w-3.5 h-3.5" />
-                    <span>Exportar JSON</span>
-                  </button>
-                  {isAdmin && (
+                  {(canReservePositions || isAdmin) && (
                     <button
                       type="button"
                       onClick={() => {
                         setMobileMenuOpen(false);
-                        fileInputRef.current?.click();
+                        setSearchInitialFilter('reserved');
+                        setModal('search');
                       }}
-                      className="p-2 rounded-lg bg-slate-800 text-slate-300 font-medium flex items-center justify-center gap-1.5"
+                      className="w-full flex items-center justify-between p-2.5 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/40 text-amber-300 font-bold"
                     >
-                      <ArrowUpFromLine className="w-3.5 h-3.5" />
-                      <span>Importar JSON</span>
+                      <span className="flex items-center gap-2">
+                        <BookmarkCheck className="w-4 h-4 text-amber-400 shrink-0" />
+                        <span>Itens Reservados</span>
+                      </span>
+                      <span className="px-2 py-0.5 rounded bg-amber-400 text-slate-950 font-mono text-[10px]">
+                        {reservedCount}
+                      </span>
+                    </button>
+                  )}
+
+                  {canUseConferentePanel && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMobileMenuOpen(false);
+                        setConferentePanelOpen(true);
+                      }}
+                      className="w-full flex items-center gap-2 p-2.5 rounded-xl bg-sky-500/15 hover:bg-sky-500/25 border border-sky-500/40 text-sky-300 font-bold"
+                    >
+                      <ClipboardCheck className="w-4 h-4 text-sky-400 shrink-0" />
+                      <span>Abrir Painel do Conferente</span>
                     </button>
                   )}
                 </div>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    setMobileMenuOpen(false);
-                    setModal('png-export');
-                  }}
-                  className="w-full flex items-center justify-center gap-2 p-2.5 rounded-xl bg-orange-600 hover:bg-orange-500 text-white font-bold shadow-md shadow-orange-950/40 mt-1"
-                >
-                  <CameraIcon className="w-4 h-4" />
-                  <span>Exportar Imagem PNG em Alta Resolução</span>
-                </button>
               </div>
+
+              {/* Seção 2: Gestão do Galpão & Medição (Oculto para Visitante simples) */}
+              {!isVisitor && (
+                <div className="space-y-1.5 pt-1 border-t border-slate-800">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Espaço & Medidas</span>
+                  <div className="space-y-1.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMobileMenuOpen(false);
+                        setModal('layers');
+                      }}
+                      className="w-full flex items-center justify-between p-2.5 rounded-xl bg-slate-800/70 hover:bg-slate-800 text-slate-200 font-semibold"
+                    >
+                      <div className="flex items-center gap-2.5">
+                        <Layers className="w-4 h-4 text-orange-400 shrink-0" />
+                        <span>Camadas & Foco Individual por Espaço</span>
+                      </div>
+                    </button>
+
+                    {isAdmin && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setMobileMenuOpen(false);
+                            setModal('warehouse-size');
+                          }}
+                          className="w-full flex items-center justify-between p-2.5 rounded-xl bg-slate-800/70 hover:bg-slate-800 text-slate-200 font-semibold"
+                        >
+                          <div className="flex items-center gap-2.5">
+                            <Maximize2 className="w-4 h-4 text-orange-400 shrink-0" />
+                            <span>Tamanho do Galpão ({bounds.widthMeters}m × {bounds.heightMeters}m)</span>
+                          </div>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setMobileMenuOpen(false);
+                            setModal('scale');
+                          }}
+                          className="w-full flex items-center justify-between p-2.5 rounded-xl bg-slate-800/70 hover:bg-slate-800 text-slate-200 font-semibold"
+                        >
+                          <div className="flex items-center gap-2.5">
+                            <Ruler className="w-4 h-4 text-orange-400 shrink-0" />
+                            <span>Calibrar Escala CAD (1m = {scaleRatio}px)</span>
+                          </div>
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Seção 3: Galpões, Backup & Exportação */}
+              {(isAdmin || canReservePositions) && (
+                <div className="space-y-1.5 pt-1 border-t border-slate-800">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Galpões & Exportação</span>
+                  <div className="grid grid-cols-2 gap-2">
+                    {isAdmin && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setMobileMenuOpen(false);
+                            openWarehouseManager('list');
+                          }}
+                          className="col-span-2 p-2.5 rounded-xl bg-slate-800/90 hover:bg-slate-800 text-slate-100 font-semibold flex items-center justify-center gap-2 border border-slate-700/80"
+                        >
+                          <Warehouse className="w-4 h-4 text-orange-400" />
+                          <span>Gerenciar Galpões (Criar / Editar / Excluir)</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setMobileMenuOpen(false);
+                            openWarehouseManager('edit', activeArea.id);
+                          }}
+                          className="p-2 rounded-lg bg-slate-800 text-slate-300 font-medium flex items-center justify-center gap-1.5"
+                        >
+                          <Pencil className="w-3.5 h-3.5 text-orange-400" />
+                          <span>Editar Galpão</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setMobileMenuOpen(false);
+                            openWarehouseManager('create');
+                          }}
+                          className="p-2 rounded-lg bg-slate-800 text-slate-300 font-medium flex items-center justify-center gap-1.5"
+                        >
+                          <Plus className="w-3.5 h-3.5 text-emerald-400" />
+                          <span>Novo Galpão</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setMobileMenuOpen(false);
+                            exportBackup();
+                          }}
+                          className="p-2 rounded-lg bg-slate-800 text-slate-300 font-medium flex items-center justify-center gap-1.5"
+                        >
+                          <ArrowDownToLine className="w-3.5 h-3.5" />
+                          <span>Exportar JSON</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setMobileMenuOpen(false);
+                            fileInputRef.current?.click();
+                          }}
+                          className="p-2 rounded-lg bg-slate-800 text-slate-300 font-medium flex items-center justify-center gap-1.5"
+                        >
+                          <ArrowUpFromLine className="w-3.5 h-3.5" />
+                          <span>Importar JSON</span>
+                        </button>
+                      </>
+                    )}
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMobileMenuOpen(false);
+                      setModal('png-export');
+                    }}
+                    className="w-full flex items-center justify-center gap-2 p-2.5 rounded-xl bg-orange-600 hover:bg-orange-500 text-white font-bold shadow-md shadow-orange-950/40 mt-1"
+                  >
+                    <CameraIcon className="w-4 h-4" />
+                    <span>Exportar Imagem PNG em Alta Resolução</span>
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -3941,11 +4193,15 @@ export default function Editor() {
       {/* MODAL: BUSCA GLOBAL WMS & LOCALIZADOR */}
       <WMSSearchDialog
         isOpen={modal === 'search'}
-        onClose={() => setModal(null)}
+        onClose={() => {
+          setModal(null);
+          setSearchInitialFilter('all');
+        }}
         areas={areas}
         activeAreaId={activeId}
         onNavigateToResult={handleNavigateToSearchResult}
         isDark={isDark}
+        initialFilterType={searchInitialFilter}
       />
 
       {/* MODAL: SPOTLIGHT COMMAND PALETTE 4.0 (CTRL+K) */}
@@ -4088,7 +4344,7 @@ export default function Editor() {
         </div>
       )}
 
-      {/* MODAL: LOGIN & RECUPERAÇÃO DE SENHA ADMIN */}
+      {/* MODAL: LOGIN, AUTOCADASTRO COMUM & RECUPERAÇÃO DE SENHA */}
       <AuthDialog
         isOpen={modal === 'auth'}
         onClose={() => setModal(null)}
@@ -4097,21 +4353,37 @@ export default function Editor() {
         isDark={isDark}
         passwordRecoveryPending={auth.passwordRecoveryPending}
         onLogin={auth.login}
+        onSignUp={auth.signUp}
+        onSignedUpCommonUser={(needsEmail) => {
+          setToast(
+            needsEmail
+              ? 'Conta criada! Confirme seu e-mail para aguardar a atribuição de cargo.'
+              : 'Conta de Usuário Comum criada! Aguarde o Administrador atribuir seu cargo.'
+          );
+        }}
         onRequestPasswordReset={auth.requestPasswordReset}
         onCompletePasswordRecovery={auth.completePasswordRecovery}
         onClearPasswordRecovery={auth.clearPasswordRecovery}
       />
 
-      {/* MODAL: CENTRAL DE ACESSO & SINCRONIZAÇÃO EM NUVEM */}
+      {/* MODAL: CENTRAL DE ACESSO, PERFIL, MEMBROS, CARGOS & SINCRONIZAÇÃO EM NUVEM */}
       <AdminPanelDialog
         isOpen={modal === 'access-panel'}
+        initialTab={accessPanelTab}
         onClose={() => setModal(null)}
         isDark={isDark}
         isConfigured={auth.isConfigured}
         configError={auth.configError}
         user={auth.user}
+        profile={auth.profile}
         role={auth.role}
+        cargoId={auth.cargoId}
+        cargoName={auth.cargoName}
+        cargoColor={auth.cargoColor}
+        permissions={auth.permissions}
         isAdmin={isAdmin}
+        canManageRoles={canManageRoles}
+        isAuthenticated={auth.isAuthenticated}
         connectionStatus={sharedMap.connectionStatus}
         syncStatus={sharedMap.syncStatus}
         syncError={sharedMap.syncError}
@@ -4121,9 +4393,15 @@ export default function Editor() {
         hasUnsavedChanges={sharedMap.hasUnsavedChanges}
         onOpenLogin={() => setModal('auth')}
         onLogout={auth.logout}
+        onRefreshAccess={auth.refreshRole}
+        onUpdateProfile={auth.updateProfile}
+        onChangePassword={auth.changePassword}
         onForceSyncNow={() => sharedMap.flushSaveToCloud()}
         onReloadFromCloud={() => sharedMap.reloadFromCloud()}
         onExportBackup={exportBackup}
+        onOpenWarehouseManager={isAdmin ? () => openWarehouseManager('list') : undefined}
+        onOpenResizeDialog={isAdmin ? () => setModal('warehouse-size') : undefined}
+        onOpenScaleDialog={isAdmin ? () => setModal('scale') : undefined}
       />
 
       {/* MODAL: MIGRAÇÃO INICIAL DO MAPA LOCAL PARA O SUPABASE */}

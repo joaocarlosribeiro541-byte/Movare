@@ -2,7 +2,7 @@ import { useState } from 'react';
 import {
   MousePointer2, Move, Eye, RectangleHorizontal, Tag, Ruler,
   Magnet, ShieldCheck, CheckSquare, RotateCcw, Redo2,
-  ChevronDown, ChevronUp, SlidersHorizontal, Sparkles
+  ChevronDown, ChevronUp
 } from 'lucide-react';
 
 export type EditorTool = 'select' | 'move' | 'rectangle' | 'divider' | 'corridor' | 'measure' | 'pan';
@@ -23,6 +23,7 @@ type FloatingActionDockProps = {
   isDark: boolean;
   onOpenSpotlight: () => void;
   isAdmin?: boolean;
+  userRole?: 'admin' | 'assistencia' | 'conferente' | 'visitor';
 };
 
 export function FloatingActionDock({
@@ -40,8 +41,14 @@ export function FloatingActionDock({
   onRedo,
   isDark,
   isAdmin = false,
+  userRole = 'visitor',
 }: FloatingActionDockProps) {
   const [isMinimized, setIsMinimized] = useState(false);
+
+  // Visitante e Conferente usam interface ultra-limpa sem dock de ferramentas CAD
+  if (!isAdmin && (userRole === 'visitor' || userRole === 'conferente')) {
+    return null;
+  }
 
   return (
     <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-30 pointer-events-auto flex flex-col items-center gap-1.5 select-none transition-all duration-200">
@@ -71,22 +78,24 @@ export function FloatingActionDock({
         >
           {/* CLUSTER 1: FERRAMENTAS BÁSICAS */}
           <div className="flex items-center gap-0.5 sm:gap-1">
-            <button
-              type="button"
-              onClick={() => onSelectTool('select')}
-              className={`flex items-center gap-1 px-2.5 py-1.5 rounded-xl text-xs font-semibold transition-all shrink-0 ${
-                tool === 'select'
-                  ? 'bg-orange-500 text-white shadow-md shadow-orange-500/30'
-                  : isDark
-                  ? 'text-slate-400 hover:text-white hover:bg-slate-800/60'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-              }`}
-              title="Modo Seleção (V) — Clique para consultar"
-            >
-              <MousePointer2 className="w-4 h-4 shrink-0" />
-              <span className="hidden md:inline">Selecionar</span>
-              <kbd className="hidden lg:inline text-[9px] opacity-60 font-mono">V</kbd>
-            </button>
+            {isAdmin && (
+              <button
+                type="button"
+                onClick={() => onSelectTool('select')}
+                className={`flex items-center gap-1 px-2.5 py-1.5 rounded-xl text-xs font-semibold transition-all shrink-0 ${
+                  tool === 'select'
+                    ? 'bg-orange-500 text-white shadow-md shadow-orange-500/30'
+                    : isDark
+                    ? 'text-slate-400 hover:text-white hover:bg-slate-800/60'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                }`}
+                title="Modo Seleção (V) — Clique para editar"
+              >
+                <MousePointer2 className="w-4 h-4 shrink-0" />
+                <span className="hidden md:inline">Selecionar</span>
+                <kbd className="hidden lg:inline text-[9px] opacity-60 font-mono">V</kbd>
+              </button>
+            )}
 
             {isAdmin && (
               <button

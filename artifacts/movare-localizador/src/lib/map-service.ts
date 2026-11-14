@@ -314,6 +314,132 @@ export async function saveCentralMap(
   }
 }
 
+export type ToggleReservationResult =
+  | {
+      ok: true;
+      record: SharedMapRecord;
+      nextStatus: 'reserved' | 'occupied' | 'empty';
+    }
+  | {
+      ok: false;
+      reason: 'unconfigured' | 'forbidden' | 'invalid' | 'not_found' | 'network';
+      error: string;
+    };
+
+export async function toggleRemotePositionReservation(
+  params: {
+    areaId: string;
+    elementId: string;
+    positionId: string;
+    reserved?: boolean;
+  },
+  client: SupabaseClient | null = supabase
+): Promise<ToggleReservationResult> {
+  if ((!isSupabaseConfigured && client === supabase) || !client) {
+    return {
+      ok: false,
+      reason: 'unconfigured',
+      error: 'Supabase não configurado neste ambiente.',
+    };
+  }
+
+  try {
+    const { data, error } = await client.rpc('toggle_position_reservation', {
+      p_map_id: CENTRAL_MAP_ID,
+      p_area_id: params.areaId,
+      p_element_id: params.elementId,
+      p_position_id: params.positionId,
+      p_reserved: params.reserved ?? null,
+    });
+
+    if (error) {
+      const msg = error.message.toLowerCase();
+      if (msg.includes('permission') || msg.includes('rls') || msg.includes('forbidden') || error.code === '42501') {
+        return {
+          ok: false,
+          reason: 'forbidden',
+          error: 'Permissão negada: apenas Administrador ou Assistência Técnica podem reservar posições.',
+        };
+      }
+      if (msg.includes('could not find the function') || msg.includes('toggle_position_reservation')) {
+        return {
+          ok: false,
+          reason: 'invalid',
+          error: 'Execute o script atualizado supabase/schema.sql no Supabase SQL Editor para habilitar reservas da Assistência na nuvem.',
+        };
+      }
+      return {
+        ok: false,
+        reason: 'network',
+        error: `Erro ao sincronizar reserva com a nuvem: ${error.message}`,
+      };
+    }
+
+    const payload = (data || {}) as Record<string, unknown>;
+    const status = payload.status;
+
+    if (status === 'forbidden') {
+      return {
+        ok: false,
+        reason: 'forbidden',
+        error:
+          (typeof payload.error === 'string' && payload.error) ||
+          'Permissão negada para alterar reserva.',
+      };
+    }
+
+    if (status === 'not_found') {
+      return {
+        ok: false,
+        reason: 'not_found',
+        error: (typeof payload.error === 'string' && payload.error) || 'Posição não encontrada no mapa central.',
+      };
+    }
+
+    if (status === 'invalid') {
+      return {
+        ok: false,
+        reason: 'invalid',
+        error: (typeof payload.error === 'string' && payload.error) || 'Parâmetros inválidos para reserva.',
+      };
+    }
+
+    if (status === 'ok') {
+      const savedRecord = parseRemoteSharedMapRecord(payload);
+      const nextStatusRaw = payload.next_status;
+      const nextStatus: 'reserved' | 'occupied' | 'empty' =
+        nextStatusRaw === 'reserved' || nextStatusRaw === 'occupied' || nextStatusRaw === 'empty'
+          ? nextStatusRaw
+          : 'reserved';
+
+      if (!savedRecord) {
+        return {
+          ok: false,
+          reason: 'network',
+          error: 'Resposta inesperada do servidor ao confirmar reserva.',
+        };
+      }
+      return {
+        ok: true,
+        record: savedRecord,
+        nextStatus,
+      };
+    }
+
+    return {
+      ok: false,
+      reason: 'network',
+      error: 'Resposta inválida da RPC toggle_position_reservation.',
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      reason: 'network',
+      error: err instanceof Error ? err.message : 'Falha de rede ao sincronizar reserva.',
+    };
+  }
+}
+
 export function subscribeToCentralMap(
   handlers: {
     onRemoteRecord: (record: SharedMapRecord) => void;

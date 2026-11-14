@@ -3,14 +3,22 @@ import {
   Magnet, ShieldCheck, CheckSquare, Search, Layers,
   ArrowDownToLine, ArrowUpFromLine, CircleHelp, Sun, Moon,
   Plus, ChevronDown, Maximize2, RotateCcw, Redo2,
-  SlidersHorizontal, PanelRightOpen, PanelRightClose, Camera, Crosshair,
-  Eye, LogIn, Cloud, CloudOff, AlertTriangle, Pencil,
-  UploadCloud, Loader2
+  SlidersHorizontal, PanelRightOpen, PanelRightClose, Camera,
+  Crosshair, Eye, LogIn, Cloud, CloudOff, AlertTriangle, Pencil,
+  UploadCloud, Loader2, BookmarkCheck, ClipboardCheck
 } from 'lucide-react';
 import type { FloorArea } from '../editor-model';
 import type { EditorTool } from './floating-action-dock';
 import type { RealtimeConnectionStatus } from '../lib/map-service';
 import type { CloudSyncStatus } from '../hooks/use-shared-map';
+import {
+  DEFAULT_PERMISSIONS_BY_ROLE,
+  type CargoColor,
+  type UserPermissions,
+  type UserProfileData,
+  type UserRole,
+} from '../lib/auth';
+import { ProfileMenu, type AccessPanelTab } from './auth/profile-menu';
 
 type TopCommandBarProps = {
   areas: FloorArea[];
@@ -19,7 +27,9 @@ type TopCommandBarProps = {
   onCreateNewArea: () => void;
   onOpenWarehouseManager?: () => void;
   bounds: { widthMeters: number; heightMeters: number };
+  scaleRatio?: number;
   onOpenResizeDialog: () => void;
+  onOpenScaleDialog?: () => void;
   tool: EditorTool;
   onSelectTool: (tool: EditorTool) => void;
   snapEnabled: boolean;
@@ -35,6 +45,11 @@ type TopCommandBarProps = {
   canRedo: boolean;
   onRedo: () => void;
   onOpenSpotlight: () => void;
+  onOpenSearch?: () => void;
+  onOpenReservedSearch?: () => void;
+  reservedCount?: number;
+  onToggleConferentePanel?: () => void;
+  conferentePanelOpen?: boolean;
   onOpenLayers: () => void;
   onOpenShortcuts: () => void;
   onOpenPngExport: () => void;
@@ -46,6 +61,15 @@ type TopCommandBarProps = {
   sidebarOpen: boolean;
   onToggleSidebar: () => void;
   onOpenMobileMenu: () => void;
+  userRole?: UserRole;
+  cargoName?: string | null;
+  cargoColor?: CargoColor | null;
+  profile?: UserProfileData | null;
+  permissions?: UserPermissions;
+  canManageRoles?: boolean;
+  canReserve?: boolean;
+  canUseConferente?: boolean;
+  isCommonUser?: boolean;
   isAdmin?: boolean;
   userEmail?: string | null;
   connectionStatus?: RealtimeConnectionStatus;
@@ -53,7 +77,9 @@ type TopCommandBarProps = {
   mapVersion?: number | null;
   hasUnsavedChanges?: boolean;
   onSaveToCloud?: () => void;
-  onOpenAccessPanel?: () => void;
+  onOpenAccessPanel?: (tab?: AccessPanelTab) => void;
+  onRefreshAccess?: () => Promise<unknown>;
+  onLogout?: () => Promise<unknown>;
   onOpenLogin?: () => void;
 };
 
@@ -64,7 +90,9 @@ export function TopCommandBar({
   onCreateNewArea,
   onOpenWarehouseManager,
   bounds,
+  scaleRatio,
   onOpenResizeDialog,
+  onOpenScaleDialog,
   tool,
   onSelectTool,
   snapEnabled,
@@ -80,6 +108,11 @@ export function TopCommandBar({
   canRedo,
   onRedo,
   onOpenSpotlight,
+  onOpenSearch,
+  onOpenReservedSearch,
+  reservedCount = 0,
+  onToggleConferentePanel,
+  conferentePanelOpen = false,
   onOpenLayers,
   onOpenShortcuts,
   onOpenPngExport,
@@ -91,6 +124,15 @@ export function TopCommandBar({
   sidebarOpen,
   onToggleSidebar,
   onOpenMobileMenu,
+  userRole = 'visitor',
+  cargoName = null,
+  cargoColor = null,
+  profile = null,
+  permissions,
+  canManageRoles,
+  canReserve,
+  canUseConferente,
+  isCommonUser = false,
   isAdmin = false,
   userEmail = null,
   connectionStatus = 'unconfigured',
@@ -99,14 +141,30 @@ export function TopCommandBar({
   hasUnsavedChanges = false,
   onSaveToCloud,
   onOpenAccessPanel,
+  onRefreshAccess,
+  onLogout,
   onOpenLogin,
 }: TopCommandBarProps) {
+  const showConferenteBtn = Boolean(canUseConferente ?? userRole === 'conferente');
+  const showReserveBtn = Boolean(canReserve ?? (isAdmin || userRole === 'assistencia'));
+  const isVisitor = userRole === 'visitor' && !isAdmin && !showReserveBtn && !showConferenteBtn;
+  const isConferente = showConferenteBtn;
+  const isAssistencia = !isAdmin && showReserveBtn;
+  const isAuthenticated = Boolean(userEmail);
+  const resolvedPermissions: UserPermissions = permissions ?? {
+    ...DEFAULT_PERMISSIONS_BY_ROLE[userRole],
+    canEditMap: isAdmin,
+    canReservePositions: showReserveBtn,
+    canUseConferentePanel: showConferenteBtn,
+    canManageRoles: Boolean(canManageRoles ?? isAdmin),
+  };
+
   return (
     <header
       className={`h-12 shrink-0 flex items-center justify-between gap-2 px-3 sm:px-4 border-b z-30 select-none backdrop-blur-2xl transition-colors duration-200 ${
         isDark
-          ? 'bg-slate-950/85 border-slate-800/80 text-slate-100 shadow-slate-950/40'
-          : 'bg-white/90 border-slate-200/90 text-slate-800 shadow-xs'
+          ? 'bg-slate-950/90 border-slate-800/80 text-slate-100 shadow-slate-950/40'
+          : 'bg-white/95 border-slate-200/90 text-slate-800 shadow-xs'
       }`}
     >
       {/* SEÇÃO 1: MARCA & SELETOR DE GALPÃO */}
@@ -127,7 +185,7 @@ export function TopCommandBar({
         >
           <select
             aria-label="Escolher galpão"
-            className={`text-xs font-semibold bg-transparent border-0 pr-4 appearance-none cursor-pointer truncate max-w-[90px] sm:max-w-[140px] md:max-w-[170px] focus:outline-none ${
+            className={`text-xs font-semibold bg-transparent border-0 pr-4 appearance-none cursor-pointer truncate max-w-[100px] sm:max-w-[150px] md:max-w-[180px] focus:outline-none ${
               isDark ? 'text-slate-200' : 'text-slate-800'
             }`}
             value={activeAreaId}
@@ -167,215 +225,244 @@ export function TopCommandBar({
           )}
         </div>
 
-        {/* Dimensões em Metros */}
-        <button
-          type="button"
-          onClick={isAdmin ? onOpenResizeDialog : undefined}
-          disabled={!isAdmin}
-          className={`hidden lg:flex items-center gap-1.5 px-2 py-1 rounded-xl border text-[11px] font-mono transition-colors ${
-            isAdmin ? 'cursor-pointer' : 'cursor-default opacity-80'
-          } ${
-            isDark
-              ? 'bg-slate-900/50 border-slate-800 text-slate-300 hover:border-orange-500/50 hover:text-orange-400'
-              : 'bg-slate-100/80 border-slate-200 text-slate-700 hover:border-orange-500 hover:text-orange-600'
-          }`}
-          title={isAdmin ? 'Dimensões do Galpão (Clique para redimensionar)' : 'Dimensões atuais do galpão'}
-        >
-          <Maximize2 className="w-3 h-3 text-orange-500 shrink-0" />
-          <span className="tabular-nums font-semibold">{bounds.widthMeters}×{bounds.heightMeters}m</span>
-        </button>
+        {/* Dimensões em Metros (apenas Admin / Assistência em desktop grande) */}
+        {!isVisitor && (
+          <button
+            type="button"
+            onClick={isAdmin ? onOpenResizeDialog : undefined}
+            disabled={!isAdmin}
+            className={`hidden lg:flex items-center gap-1.5 px-2 py-1 rounded-xl border text-[11px] font-mono transition-colors ${
+              isAdmin ? 'cursor-pointer' : 'cursor-default opacity-80'
+            } ${
+              isDark
+                ? 'bg-slate-900/50 border-slate-800 text-slate-300 hover:border-orange-500/50 hover:text-orange-400'
+                : 'bg-slate-100/80 border-slate-200 text-slate-700 hover:border-orange-500 hover:text-orange-600'
+            }`}
+            title={isAdmin ? 'Dimensões do Galpão (Clique para redimensionar)' : 'Dimensões atuais do galpão'}
+          >
+            <Maximize2 className="w-3 h-3 text-orange-500 shrink-0" />
+            <span className="tabular-nums font-semibold">{bounds.widthMeters}×{bounds.heightMeters}m</span>
+          </button>
+        )}
       </div>
 
-      {/* SEÇÃO 2: BARRA DE COMANDO CAD CENTRALIZADA (4.0) */}
-      <div className="hidden md:flex items-center gap-1">
-        {/* Cluster de Modos CAD */}
-        <div
-          className={`flex items-center p-0.5 rounded-xl border ${
-            isDark ? 'bg-slate-900/80 border-slate-800' : 'bg-slate-100/80 border-slate-200'
-          }`}
-        >
-          <button
-            type="button"
-            onClick={() => onSelectTool('select')}
-            className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
-              tool === 'select'
-                ? 'bg-orange-500 text-white shadow-xs'
-                : isDark
-                ? 'text-slate-400 hover:text-white hover:bg-slate-800/60'
-                : 'text-slate-600 hover:text-slate-900 hover:bg-white'
+      {/* SEÇÃO 2: BARRA DE COMANDO POR PERFIL */}
+      {isAdmin ? (
+        <div className="hidden md:flex items-center gap-1">
+          <div
+            className={`flex items-center p-0.5 rounded-xl border ${
+              isDark ? 'bg-slate-900/80 border-slate-800' : 'bg-slate-100/80 border-slate-200'
             }`}
-            title="Selecionar (V)"
           >
-            <MousePointer2 className="w-3.5 h-3.5" />
-            <span>Selecionar</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => onSelectTool('pan')}
-            className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
-              tool === 'pan'
-                ? 'bg-orange-500 text-white shadow-xs'
-                : isDark
-                ? 'text-slate-400 hover:text-white hover:bg-slate-800/60'
-                : 'text-slate-600 hover:text-slate-900 hover:bg-white'
-            }`}
-            title="Modo Visualização (H) — Consultar mapa e resumo dos itens sem editar"
-          >
-            <Eye className="w-3.5 h-3.5" />
-            <span>Visualizar</span>
-          </button>
-
-          {isAdmin && (
-            <>
-              <button
-                type="button"
-                onClick={() => onSelectTool('move')}
-                className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
-                  tool === 'move'
-                    ? 'bg-orange-500 text-white shadow-xs'
-                    : isDark
-                    ? 'text-slate-400 hover:text-white hover:bg-slate-800/60'
-                    : 'text-slate-600 hover:text-slate-900 hover:bg-white'
-                }`}
-                title="Mover (M)"
-              >
-                <Move className="w-3.5 h-3.5" />
-                <span>Mover</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => onSelectTool('rectangle')}
-                className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
-                  tool === 'rectangle'
-                    ? 'bg-orange-500 text-white shadow-xs'
-                    : isDark
-                    ? 'text-slate-400 hover:text-white hover:bg-slate-800/60'
-                    : 'text-slate-600 hover:text-slate-900 hover:bg-white'
-                }`}
-                title="Nova Zona (R)"
-              >
-                <RectangleHorizontal className="w-3.5 h-3.5 text-orange-400" />
-                <span className="hidden xl:inline">Zona</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => onSelectTool('corridor')}
-                className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
-                  tool === 'corridor'
-                    ? 'bg-orange-500 text-white shadow-xs'
-                    : isDark
-                    ? 'text-slate-400 hover:text-white hover:bg-slate-800/60'
-                    : 'text-slate-600 hover:text-slate-900 hover:bg-white'
-                }`}
-                title="Corredor / Rua (C)"
-              >
-                <Tag className="w-3.5 h-3.5 text-emerald-400" />
-                <span className="hidden xl:inline">Rua</span>
-              </button>
-            </>
-          )}
-
-          <button
-            type="button"
-            onClick={() => onSelectTool('measure')}
-            className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
-              tool === 'measure'
-                ? 'bg-orange-500 text-white shadow-xs'
-                : isDark
-                ? 'text-slate-400 hover:text-white hover:bg-slate-800/60'
-                : 'text-slate-600 hover:text-slate-900 hover:bg-white'
-            }`}
-            title="Fita Métrica (T)"
-          >
-            <Ruler className="w-3.5 h-3.5 text-amber-400" />
-            <span className="hidden xl:inline">Medir</span>
-          </button>
-        </div>
-
-        {/* Toggles de Precisão: Magnetismo CAD & Física (edição apenas para Admin) */}
-        <div
-          className={`flex items-center p-0.5 rounded-xl border ${
-            isDark ? 'bg-slate-900/80 border-slate-800' : 'bg-slate-100/80 border-slate-200'
-          }`}
-        >
-          {isAdmin && (
-            <>
-              <button
-                type="button"
-                onClick={onToggleSnap}
-                className={`p-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer flex items-center gap-1 ${
-                  snapEnabled
-                    ? isDark
-                      ? 'bg-orange-500/20 text-orange-400 border border-orange-500/40'
-                      : 'bg-orange-100 text-orange-700 border border-orange-300'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-                title={snapEnabled ? 'Magnetismo Snap Ativo' : 'Movimento Livre'}
-              >
-                <Magnet className="w-3.5 h-3.5" />
-                <span className="hidden 2xl:inline text-[11px]">Snap</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={onTogglePhysics}
-                className={`p-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer flex items-center gap-1 ${
-                  physicsEnabled
-                    ? isDark
-                      ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'
-                      : 'bg-emerald-100 text-emerald-700 border border-emerald-300'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-                title={physicsEnabled ? 'Física Anti-Sobreposição Ativa' : 'Física Desativada'}
-              >
-                <ShieldCheck className="w-3.5 h-3.5" />
-                <span className="hidden 2xl:inline text-[11px]">Física</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={onToggleMultiSelect}
-                className={`p-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer flex items-center gap-1 ${
-                  multiSelectMode
-                    ? isDark
-                      ? 'bg-sky-500/20 text-sky-400 border border-sky-500/40'
-                      : 'bg-sky-100 text-sky-700 border border-sky-300'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-                title={multiSelectMode ? 'Seleção Múltipla Ativa' : 'Seleção Individual'}
-              >
-                <CheckSquare className="w-3.5 h-3.5" />
-                <span className="hidden 2xl:inline text-[11px]">Multi</span>
-              </button>
-            </>
-          )}
-
-          {onTogglePrecisionNav && (
             <button
               type="button"
-              onClick={onTogglePrecisionNav}
+              onClick={() => onSelectTool('select')}
+              className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                tool === 'select'
+                  ? 'bg-orange-500 text-white shadow-xs'
+                  : isDark
+                  ? 'text-slate-400 hover:text-white hover:bg-slate-800/60'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-white'
+              }`}
+              title="Selecionar (V)"
+            >
+              <MousePointer2 className="w-3.5 h-3.5" />
+              <span>Selecionar</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => onSelectTool('pan')}
+              className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                tool === 'pan'
+                  ? 'bg-orange-500 text-white shadow-xs'
+                  : isDark
+                  ? 'text-slate-400 hover:text-white hover:bg-slate-800/60'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-white'
+              }`}
+              title="Modo Visualização (H)"
+            >
+              <Eye className="w-3.5 h-3.5" />
+              <span>Visualizar</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => onSelectTool('move')}
+              className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                tool === 'move'
+                  ? 'bg-orange-500 text-white shadow-xs'
+                  : isDark
+                  ? 'text-slate-400 hover:text-white hover:bg-slate-800/60'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-white'
+              }`}
+              title="Mover (M)"
+            >
+              <Move className="w-3.5 h-3.5" />
+              <span>Mover</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => onSelectTool('rectangle')}
+              className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                tool === 'rectangle'
+                  ? 'bg-orange-500 text-white shadow-xs'
+                  : isDark
+                  ? 'text-slate-400 hover:text-white hover:bg-slate-800/60'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-white'
+              }`}
+              title="Nova Zona (R)"
+            >
+              <RectangleHorizontal className="w-3.5 h-3.5 text-orange-400" />
+              <span className="hidden xl:inline">Zona</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => onSelectTool('corridor')}
+              className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                tool === 'corridor'
+                  ? 'bg-orange-500 text-white shadow-xs'
+                  : isDark
+                  ? 'text-slate-400 hover:text-white hover:bg-slate-800/60'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-white'
+              }`}
+              title="Corredor / Rua (C)"
+            >
+              <Tag className="w-3.5 h-3.5 text-emerald-400" />
+              <span className="hidden xl:inline">Rua</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => onSelectTool('measure')}
+              className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                tool === 'measure'
+                  ? 'bg-orange-500 text-white shadow-xs'
+                  : isDark
+                  ? 'text-slate-400 hover:text-white hover:bg-slate-800/60'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-white'
+              }`}
+              title="Fita Métrica (T)"
+            >
+              <Ruler className="w-3.5 h-3.5 text-amber-400" />
+              <span className="hidden xl:inline">Medir</span>
+            </button>
+          </div>
+
+          <div
+            className={`flex items-center p-0.5 rounded-xl border ${
+              isDark ? 'bg-slate-900/80 border-slate-800' : 'bg-slate-100/80 border-slate-200'
+            }`}
+          >
+            <button
+              type="button"
+              onClick={onToggleSnap}
               className={`p-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer flex items-center gap-1 ${
-                precisionNavMode
+                snapEnabled
                   ? isDark
-                    ? 'bg-amber-500/20 text-amber-400 border border-amber-500/40'
-                    : 'bg-amber-100 text-amber-700 border border-amber-300'
+                    ? 'bg-orange-500/20 text-orange-400 border border-orange-500/40'
+                    : 'bg-orange-100 text-orange-700 border border-orange-300'
                   : 'text-slate-400 hover:text-slate-200'
               }`}
-              title={precisionNavMode ? 'Precisão CAD Ativa (Trava no ponto exato sem inércia)' : 'Inércia Ativa (Deslize livre)'}
+              title={snapEnabled ? 'Magnetismo Snap Ativo' : 'Movimento Livre'}
             >
-              <Crosshair className="w-3.5 h-3.5" />
-              <span className="hidden 2xl:inline text-[11px]">Precisão</span>
+              <Magnet className="w-3.5 h-3.5" />
+              <span className="hidden 2xl:inline text-[11px]">Snap</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={onTogglePhysics}
+              className={`p-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer flex items-center gap-1 ${
+                physicsEnabled
+                  ? isDark
+                    ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'
+                    : 'bg-emerald-100 text-emerald-700 border border-emerald-300'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+              title={physicsEnabled ? 'Física Anti-Sobreposição Ativa' : 'Física Desativada'}
+            >
+              <ShieldCheck className="w-3.5 h-3.5" />
+              <span className="hidden 2xl:inline text-[11px]">Física</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={onToggleMultiSelect}
+              className={`p-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer flex items-center gap-1 ${
+                multiSelectMode
+                  ? isDark
+                    ? 'bg-sky-500/20 text-sky-400 border border-sky-500/40'
+                    : 'bg-sky-100 text-sky-700 border border-sky-300'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+              title={multiSelectMode ? 'Seleção Múltipla Ativa' : 'Seleção Individual'}
+            >
+              <CheckSquare className="w-3.5 h-3.5" />
+              <span className="hidden 2xl:inline text-[11px]">Multi</span>
+            </button>
+
+            {onTogglePrecisionNav && (
+              <button
+                type="button"
+                onClick={onTogglePrecisionNav}
+                className={`p-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer flex items-center gap-1 ${
+                  precisionNavMode
+                    ? isDark
+                      ? 'bg-amber-500/20 text-amber-400 border border-amber-500/40'
+                      : 'bg-amber-100 text-amber-700 border border-amber-300'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+                title={precisionNavMode ? 'Precisão CAD Ativa' : 'Inércia Ativa'}
+              >
+                <Crosshair className="w-3.5 h-3.5" />
+                <span className="hidden 2xl:inline text-[11px]">Precisão</span>
+              </button>
+            )}
+          </div>
+        </div>
+      ) : (
+        <div className="hidden md:flex items-center gap-2">
+          {isConferente && onToggleConferentePanel && (
+            <button
+              type="button"
+              onClick={onToggleConferentePanel}
+              className={`flex items-center gap-1.5 px-3 py-1 rounded-xl border text-xs font-bold transition-all cursor-pointer ${
+                conferentePanelOpen
+                  ? 'bg-sky-600 border-sky-500 text-white shadow-xs'
+                  : isDark
+                  ? 'bg-sky-500/15 border-sky-500/35 text-sky-300 hover:bg-sky-500/25'
+                  : 'bg-sky-50 border-sky-300 text-sky-700 hover:bg-sky-100'
+              }`}
+            >
+              <ClipboardCheck className="w-3.5 h-3.5" />
+              <span>Localizar Produto</span>
+            </button>
+          )}
+
+          {isAssistencia && onOpenReservedSearch && (
+            <button
+              type="button"
+              onClick={onOpenReservedSearch}
+              className={`flex items-center gap-1.5 px-3 py-1 rounded-xl border text-xs font-bold transition-all cursor-pointer ${
+                isDark
+                  ? 'bg-amber-500/15 border-amber-500/40 text-amber-300 hover:bg-amber-500/25'
+                  : 'bg-amber-50 border-amber-300 text-amber-800 hover:bg-amber-100'
+              }`}
+              title="Ver posições marcadas como RESERVADO"
+            >
+              <BookmarkCheck className="w-3.5 h-3.5 text-amber-400" />
+              <span>Reservados ({reservedCount})</span>
             </button>
           )}
         </div>
-      </div>
+      )}
 
-      {/* SEÇÃO 3: SPOTLIGHT, GAVETAS, STATUS NUVEM & AÇÕES DE SISTEMA */}
+      {/* SEÇÃO 3: BUSCA, CAMADAS, STATUS NUVEM & PERFIL */}
       <div className="flex items-center gap-1.5 shrink-0">
-        {/* Gatilho do Spotlight (Busca rápida Ctrl+K) */}
+        {/* Busca Rápida */}
         <button
           type="button"
           onClick={onOpenSpotlight}
@@ -384,50 +471,56 @@ export function TopCommandBar({
               ? 'bg-slate-900/80 hover:bg-slate-900 border-slate-800 text-slate-300 hover:text-white hover:border-orange-500/50'
               : 'bg-slate-100/90 hover:bg-white border-slate-200 text-slate-700 hover:text-slate-900 hover:border-orange-500/50 shadow-2xs'
           }`}
-          title="Buscar Espaço, Produto, SKU ou Comandos (Ctrl+K)"
+          title="Buscar Espaço, Produto, SKU ou Código (Ctrl+K)"
         >
           <Search className="w-3.5 h-3.5 text-orange-500 group-hover:scale-110 transition-transform shrink-0" />
-          <span className="font-medium hidden sm:inline truncate max-w-[100px] lg:max-w-none">Buscar</span>
-          <kbd
-            className={`hidden md:inline font-mono text-[9px] px-1 py-0.2 rounded border shrink-0 ${
-              isDark ? 'bg-slate-800 border-slate-700 text-slate-400' : 'bg-slate-200 border-slate-300 text-slate-600'
+          <span className="font-medium hidden sm:inline">Buscar</span>
+          {!isVisitor && (
+            <kbd
+              className={`hidden md:inline font-mono text-[9px] px-1 py-0.2 rounded border shrink-0 ${
+                isDark ? 'bg-slate-800 border-slate-700 text-slate-400' : 'bg-slate-200 border-slate-300 text-slate-600'
+              }`}
+            >
+              Ctrl+K
+            </kbd>
+          )}
+        </button>
+
+        {/* Camadas (Admin / Assistência / Conferente) */}
+        {!isVisitor && (
+          <button
+            type="button"
+            onClick={onOpenLayers}
+            className={`hidden sm:flex items-center gap-1.5 px-2 py-1 rounded-xl border text-xs font-semibold transition-colors cursor-pointer ${
+              isDark
+                ? 'bg-slate-900/70 border-slate-800 text-slate-300 hover:text-white hover:bg-slate-850'
+                : 'bg-slate-100/80 border-slate-200 text-slate-700 hover:text-slate-900 hover:bg-slate-200'
             }`}
+            title="Camadas & Visibilidade de Espaços"
           >
-            Ctrl+K
-          </kbd>
-        </button>
+            <Layers className="w-3.5 h-3.5 text-orange-500 shrink-0" />
+            <span className="hidden lg:inline">Camadas</span>
+          </button>
+        )}
 
-        {/* Camadas */}
-        <button
-          type="button"
-          onClick={onOpenLayers}
-          className={`hidden sm:flex items-center gap-1.5 px-2 py-1 rounded-xl border text-xs font-semibold transition-colors cursor-pointer ${
-            isDark
-              ? 'bg-slate-900/70 border-slate-800 text-slate-300 hover:text-white hover:bg-slate-850'
-              : 'bg-slate-100/80 border-slate-200 text-slate-700 hover:text-slate-900 hover:bg-slate-200'
-          }`}
-          title="Camadas & Visibilidade de Espaços"
-        >
-          <Layers className="w-3.5 h-3.5 text-orange-500 shrink-0" />
-          <span className="hidden lg:inline">Camadas</span>
-        </button>
+        {/* Exportar PNG (Admin e Assistência) */}
+        {(isAdmin || isAssistencia) && (
+          <button
+            type="button"
+            onClick={onOpenPngExport}
+            className={`hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-xl border text-xs font-semibold transition-all cursor-pointer ${
+              isDark
+                ? 'bg-orange-500/10 border-orange-500/30 text-orange-400 hover:bg-orange-500/20 hover:border-orange-500/50 hover:text-white'
+                : 'bg-orange-50 border-orange-200 text-orange-700 hover:bg-orange-100 hover:text-orange-900'
+            }`}
+            title="Exportar Imagem PNG em Alta Resolução"
+          >
+            <Camera className="w-3.5 h-3.5 text-orange-500 shrink-0" />
+            <span className="hidden xl:inline">Exportar PNG</span>
+          </button>
+        )}
 
-        {/* Exportar Imagem PNG em Alta Resolução */}
-        <button
-          type="button"
-          onClick={onOpenPngExport}
-          className={`flex items-center gap-1.5 px-2.5 py-1 rounded-xl border text-xs font-semibold transition-all cursor-pointer ${
-            isDark
-              ? 'bg-orange-500/10 border-orange-500/30 text-orange-400 hover:bg-orange-500/20 hover:border-orange-500/50 hover:text-white'
-              : 'bg-orange-50 border-orange-200 text-orange-700 hover:bg-orange-100 hover:text-orange-900'
-          }`}
-          title="Exportar Imagem PNG em Alta Resolução (Planta / Documentação)"
-        >
-          <Camera className="w-3.5 h-3.5 text-orange-500 shrink-0" />
-          <span className="hidden sm:inline">Exportar PNG</span>
-        </button>
-
-        {/* Histórico Desfazer / Refazer (somente Admin) */}
+        {/* Histórico Undo/Redo (Admin apenas) */}
         {isAdmin && (
           <div
             className={`hidden md:flex items-center rounded-xl border p-0.5 ${
@@ -460,38 +553,36 @@ export function TopCommandBar({
           </div>
         )}
 
-        {/* Backup JSON */}
-        <div
-          className={`hidden lg:flex items-center rounded-xl border p-0.5 ${
-            isDark ? 'border-slate-800 bg-slate-900/60' : 'border-slate-200 bg-slate-100/80'
-          }`}
-        >
-          <button
-            type="button"
-            onClick={onExportBackup}
-            title="Exportar Backup JSON"
-            className={`p-1 rounded-lg transition-colors cursor-pointer ${
-              isDark ? 'text-slate-400 hover:text-white hover:bg-slate-800' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200'
+        {/* Backup JSON (Admin apenas) */}
+        {isAdmin && (
+          <div
+            className={`hidden lg:flex items-center rounded-xl border p-0.5 ${
+              isDark ? 'border-slate-800 bg-slate-900/60' : 'border-slate-200 bg-slate-100/80'
             }`}
           >
-            <ArrowDownToLine className="w-3.5 h-3.5" />
-          </button>
-          {isAdmin && (
-            <>
-              <div className={`w-px h-3.5 ${isDark ? 'bg-slate-800' : 'bg-slate-200'}`} />
-              <button
-                type="button"
-                onClick={onImportBackup}
-                title="Importar Backup JSON"
-                className={`p-1 rounded-lg transition-colors cursor-pointer ${
-                  isDark ? 'text-slate-400 hover:text-white hover:bg-slate-800' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200'
-                }`}
-              >
-                <ArrowUpFromLine className="w-3.5 h-3.5" />
-              </button>
-            </>
-          )}
-        </div>
+            <button
+              type="button"
+              onClick={onExportBackup}
+              title="Exportar Backup JSON"
+              className={`p-1 rounded-lg transition-colors cursor-pointer ${
+                isDark ? 'text-slate-400 hover:text-white hover:bg-slate-800' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200'
+              }`}
+            >
+              <ArrowDownToLine className="w-3.5 h-3.5" />
+            </button>
+            <div className={`w-px h-3.5 ${isDark ? 'bg-slate-800' : 'bg-slate-200'}`} />
+            <button
+              type="button"
+              onClick={onImportBackup}
+              title="Importar Backup JSON"
+              className={`p-1 rounded-lg transition-colors cursor-pointer ${
+                isDark ? 'text-slate-400 hover:text-white hover:bg-slate-800' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200'
+              }`}
+            >
+              <ArrowUpFromLine className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
 
         {/* Botão explícito de Salvar Alterações na Nuvem (Admin com edições pendentes) */}
         {isAdmin && onSaveToCloud && hasUnsavedChanges && (
@@ -514,79 +605,103 @@ export function TopCommandBar({
           </button>
         )}
 
-        {/* Status de Acesso & Sincronização Nuvem */}
-        {onOpenAccessPanel && (
-          <button
-            type="button"
-            onClick={onOpenAccessPanel}
-            className={`flex items-center gap-1.5 px-2 py-1 rounded-xl border text-[11px] font-semibold transition-all cursor-pointer ${
-              syncStatus === 'conflict' || syncStatus === 'error'
-                ? 'bg-rose-500/15 border-rose-500/40 text-rose-300'
-                : hasUnsavedChanges && isAdmin
-                ? isDark
-                  ? 'bg-amber-500/15 border-amber-500/40 text-amber-300 hover:bg-amber-500/25'
-                  : 'bg-amber-50 border-amber-300 text-amber-700 hover:bg-amber-100'
-                : isAdmin
-                ? isDark
-                  ? 'bg-emerald-500/15 border-emerald-500/35 text-emerald-300 hover:bg-emerald-500/25'
-                  : 'bg-emerald-50 border-emerald-300 text-emerald-700 hover:bg-emerald-100'
-                : isDark
-                ? 'bg-slate-900/80 border-slate-700/80 text-slate-300 hover:border-slate-500'
-                : 'bg-slate-100 border-slate-300 text-slate-700 hover:bg-slate-200'
-            }`}
-            title={
-              isAdmin
-                ? hasUnsavedChanges
-                  ? 'Alterações locais aguardando envio para a nuvem'
-                  : `Administrador conectado (${userEmail || 'admin'}) · Versão v${mapVersion ?? 0}`
-                : 'Modo Visitante (somente leitura) · Clique para detalhes de sincronização ou login'
-            }
-          >
-            {syncStatus === 'conflict' || syncStatus === 'error' ? (
-              <AlertTriangle className="w-3.5 h-3.5 text-rose-400 shrink-0" />
-            ) : connectionStatus === 'connected' ? (
-              <Cloud className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-            ) : (
-              <CloudOff className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+        {/* Ícone de Perfil Retrátil (Autenticado) OU Visitante (Entrar + Menu Mobile) */}
+        {isAuthenticated && userEmail && onOpenAccessPanel && onLogout ? (
+          <ProfileMenu
+            isDark={isDark}
+            userEmail={userEmail}
+            profile={profile}
+            userRole={userRole}
+            cargoName={cargoName}
+            cargoColor={cargoColor}
+            permissions={resolvedPermissions}
+            isAdmin={isAdmin}
+            canManageRoles={Boolean(canManageRoles ?? resolvedPermissions.canManageRoles)}
+            canReservePositions={showReserveBtn}
+            canUseConferentePanel={showConferenteBtn}
+            isCommonUser={isCommonUser}
+            connectionStatus={connectionStatus}
+            syncStatus={syncStatus}
+            mapVersion={mapVersion}
+            hasUnsavedChanges={hasUnsavedChanges}
+            bounds={bounds}
+            scaleRatio={scaleRatio}
+            reservedCount={reservedCount}
+            conferentePanelOpen={conferentePanelOpen}
+            onOpenAccessPanelTab={(tab) => onOpenAccessPanel(tab)}
+            onOpenWarehouseManager={onOpenWarehouseManager}
+            onOpenResizeDialog={isAdmin ? onOpenResizeDialog : undefined}
+            onOpenScaleDialog={isAdmin ? onOpenScaleDialog : undefined}
+            onOpenLayers={onOpenLayers}
+            onOpenShortcuts={isAdmin ? onOpenShortcuts : undefined}
+            onOpenPngExport={isAdmin || isAssistencia ? onOpenPngExport : undefined}
+            onExportBackup={isAdmin ? onExportBackup : undefined}
+            onImportBackup={isAdmin ? onImportBackup : undefined}
+            onSaveToCloud={isAdmin ? onSaveToCloud : undefined}
+            onOpenSearch={onOpenSearch ?? onOpenSpotlight}
+            onOpenReservedSearch={onOpenReservedSearch}
+            onToggleConferentePanel={onToggleConferentePanel}
+            onRefreshAccess={onRefreshAccess}
+            onToggleTheme={onToggleTheme}
+            onLogout={onLogout}
+          />
+        ) : (
+          <>
+            {onOpenAccessPanel && (
+              <button
+                type="button"
+                onClick={() => onOpenAccessPanel('overview')}
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-xl border text-[11px] font-semibold transition-all cursor-pointer ${
+                  syncStatus === 'conflict' || syncStatus === 'error'
+                    ? 'bg-rose-500/15 border-rose-500/40 text-rose-300'
+                    : isDark
+                    ? 'bg-slate-900/80 border-slate-700/80 text-slate-300 hover:border-slate-500'
+                    : 'bg-slate-100 border-slate-300 text-slate-700 hover:bg-slate-200'
+                }`}
+                title={`Visitante · Versão v${mapVersion ?? 0}`}
+              >
+                {syncStatus === 'conflict' || syncStatus === 'error' ? (
+                  <AlertTriangle className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+                ) : connectionStatus === 'connected' ? (
+                  <Cloud className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                ) : (
+                  <CloudOff className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                )}
+                <span className="hidden sm:inline max-w-[90px] truncate">Visitante</span>
+              </button>
             )}
-            <span className="hidden sm:inline">
-              {isAdmin ? 'Admin' : 'Visitante'}
-            </span>
-            {syncStatus === 'syncing' ? (
-              <span className="w-2 h-2 rounded-full bg-orange-400 animate-pulse shrink-0" />
-            ) : hasUnsavedChanges && isAdmin ? (
-              <span className="w-2 h-2 rounded-full bg-amber-400 shrink-0" />
-            ) : null}
-          </button>
+
+            {onOpenLogin && (
+              <button
+                type="button"
+                onClick={onOpenLogin}
+                className={`hidden sm:flex items-center gap-1 px-2.5 py-1 rounded-xl border text-[11px] font-bold transition-colors cursor-pointer ${
+                  isDark
+                    ? 'bg-slate-900 border-slate-700 text-orange-400 hover:bg-orange-500/15 hover:border-orange-500/50'
+                    : 'bg-white border-slate-300 text-orange-600 hover:bg-orange-50'
+                }`}
+                title="Entrar ou criar conta de usuário"
+              >
+                <LogIn className="w-3.5 h-3.5" />
+                <span>Entrar</span>
+              </button>
+            )}
+          </>
         )}
 
-        {!userEmail && onOpenLogin && (
+        {/* Atalhos (?) (Admin Desktop) */}
+        {isAdmin && (
           <button
             type="button"
-            onClick={onOpenLogin}
-            className={`hidden sm:flex items-center gap-1 px-2 py-1 rounded-xl border text-[11px] font-bold transition-colors cursor-pointer ${
-              isDark
-                ? 'bg-slate-900 border-slate-700 text-orange-400 hover:bg-orange-500/15 hover:border-orange-500/50'
-                : 'bg-white border-slate-300 text-orange-600 hover:bg-orange-50'
+            onClick={onOpenShortcuts}
+            className={`hidden xl:flex p-1.5 rounded-xl border text-slate-400 hover:text-orange-500 transition-colors cursor-pointer ${
+              isDark ? 'bg-slate-900/70 border-slate-800 hover:bg-slate-800' : 'bg-slate-100/80 border-slate-200 hover:bg-slate-200'
             }`}
-            title="Entrar como Administrador"
+            title="Guia de Atalhos (?)"
           >
-            <LogIn className="w-3.5 h-3.5" />
-            <span>Entrar</span>
+            <CircleHelp className="w-3.5 h-3.5" />
           </button>
         )}
-
-        {/* Atalhos (?) */}
-        <button
-          type="button"
-          onClick={onOpenShortcuts}
-          className={`hidden xl:flex p-1.5 rounded-xl border text-slate-400 hover:text-orange-500 transition-colors cursor-pointer ${
-            isDark ? 'bg-slate-900/70 border-slate-800 hover:bg-slate-800' : 'bg-slate-100/80 border-slate-200 hover:bg-slate-200'
-          }`}
-          title="Guia de Atalhos (?)"
-        >
-          <CircleHelp className="w-3.5 h-3.5" />
-        </button>
 
         {/* Alternador de Tema */}
         <button
@@ -602,8 +717,8 @@ export function TopCommandBar({
           {isDark ? <Sun className="w-3.5 h-3.5" /> : <Moon className="w-3.5 h-3.5" />}
         </button>
 
-        {/* Botão da Gaveta de Propriedades (quando há elemento selecionado) */}
-        {selectedElementCount > 0 && (
+        {/* Botão do Inspetor (Admin) */}
+        {isAdmin && selectedElementCount > 0 && (
           <button
             type="button"
             onClick={onToggleSidebar}
@@ -614,24 +729,29 @@ export function TopCommandBar({
                 ? 'bg-slate-900 border-slate-800 text-orange-400 hover:text-white hover:bg-slate-800'
                 : 'bg-slate-100 border-slate-200 text-orange-600 hover:text-slate-900 hover:bg-slate-200'
             }`}
-            title={sidebarOpen ? 'Recolher Gaveta de Propriedades' : 'Abrir Gaveta de Propriedades'}
+            title={sidebarOpen ? 'Recolher Inspetor' : 'Abrir Inspetor'}
           >
             {sidebarOpen ? <PanelRightClose className="w-3.5 h-3.5" /> : <PanelRightOpen className="w-3.5 h-3.5" />}
             <span className="hidden sm:inline">Inspetor</span>
           </button>
         )}
 
-        {/* Menu Mobile */}
-        <button
-          type="button"
-          onClick={onOpenMobileMenu}
-          className="md:hidden p-1.5 rounded-xl text-slate-300 bg-slate-800 hover:bg-slate-700 transition-colors"
-          title="Ferramentas e Menu"
-        >
-          <SlidersHorizontal className="w-4 h-4 text-orange-400" />
-        </button>
+        {/* Menu Mobile (apenas para Visitante; logados usam o ícone de perfil retrátil) */}
+        {!isAuthenticated && (
+          <button
+            type="button"
+            onClick={onOpenMobileMenu}
+            className={`md:hidden p-1.5 rounded-xl transition-colors cursor-pointer ${
+              isDark ? 'text-slate-300 bg-slate-800 hover:bg-slate-700' : 'text-slate-700 bg-slate-200 hover:bg-slate-300'
+            }`}
+            title="Menu"
+          >
+            <SlidersHorizontal className="w-4 h-4 text-orange-500" />
+          </button>
+        )}
       </div>
     </header>
   );
 }
+
 

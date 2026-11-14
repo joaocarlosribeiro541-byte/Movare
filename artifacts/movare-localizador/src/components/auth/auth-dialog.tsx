@@ -1,9 +1,9 @@
 import { useState, type FormEvent } from 'react';
 import {
   X, ShieldCheck, Mail, Lock, Loader2, ArrowLeft,
-  KeyRound, CheckCircle2, AlertTriangle, Eye, EyeOff
+  KeyRound, CheckCircle2, AlertTriangle, Eye, EyeOff, UserPlus, User
 } from 'lucide-react';
-import type { UserRole } from '../../lib/auth';
+import type { AuthSignUpResult, UserRole } from '../../lib/auth';
 
 type AuthDialogProps = {
   isOpen: boolean;
@@ -13,6 +13,8 @@ type AuthDialogProps = {
   isDark: boolean;
   passwordRecoveryPending: boolean;
   onLogin: (email: string, password: string) => Promise<{ ok: boolean; role: UserRole; error?: string }>;
+  onSignUp?: (email: string, password: string, fullName?: string) => Promise<AuthSignUpResult>;
+  onSignedUpCommonUser?: (needsEmailConfirmation: boolean) => void;
   onRequestPasswordReset: (email: string) => Promise<{ ok: boolean; error?: string }>;
   onCompletePasswordRecovery: (newPassword: string) => Promise<{ ok: boolean; error?: string }>;
   onClearPasswordRecovery: () => void;
@@ -26,15 +28,19 @@ export function AuthDialog({
   isDark,
   passwordRecoveryPending,
   onLogin,
+  onSignUp,
+  onSignedUpCommonUser,
   onRequestPasswordReset,
   onCompletePasswordRecovery,
   onClearPasswordRecovery,
 }: AuthDialogProps) {
-  const [mode, setMode] = useState<'login' | 'forgot' | 'recovery'>(
+  const [mode, setMode] = useState<'login' | 'signup' | 'forgot' | 'recovery'>(
     passwordRecoveryPending ? 'recovery' : 'login'
   );
+  const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -44,6 +50,12 @@ export function AuthDialog({
   if (!isOpen && !passwordRecoveryPending) return null;
 
   const activeMode = passwordRecoveryPending ? 'recovery' : mode;
+
+  const switchMode = (nextMode: 'login' | 'signup' | 'forgot') => {
+    setErrorMsg(null);
+    setInfoMsg(null);
+    setMode(nextMode);
+  };
 
   const handleSubmitLogin = async (e: FormEvent) => {
     e.preventDefault();
@@ -56,13 +68,47 @@ export function AuthDialog({
         setErrorMsg(res.error || 'Falha ao autenticar.');
         return;
       }
-      if (res.role !== 'admin') {
-        setErrorMsg(
-          'Conta autenticada sem privilégios administrativos. Seu acesso permanece em modo visitante (somente leitura).'
-        );
+      setPassword('');
+      onClose();
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSubmitSignUp = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!onSignUp) return;
+    setErrorMsg(null);
+    setInfoMsg(null);
+
+    if (password.length < 6) {
+      setErrorMsg('A senha deve conter no mínimo 6 caracteres.');
+      return;
+    }
+    if (password !== confirmPassword) {
+      setErrorMsg('A confirmação de senha não confere.');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const res = await onSignUp(email, password, fullName);
+      if (!res.ok) {
+        setErrorMsg(res.error || 'Não foi possível criar a conta.');
         return;
       }
       setPassword('');
+      setConfirmPassword('');
+      if (res.needsEmailConfirmation) {
+        setMode('login');
+        setInfoMsg(
+          'Conta de Usuário Comum criada! Confirme seu e-mail pelo link enviado e entre para aguardar a atribuição de cargo pelo Administrador.'
+        );
+        onSignedUpCommonUser?.(true);
+        return;
+      }
+      setFullName('');
+      onSignedUpCommonUser?.(false);
       onClose();
     } finally {
       setLoading(false);
@@ -81,7 +127,7 @@ export function AuthDialog({
         return;
       }
       setInfoMsg(
-        'Se o e-mail estiver cadastrado como administrador, você receberá um link de redefinição de senha em instantes.'
+        'Se o e-mail estiver cadastrado no sistema, você receberá um link de redefinição de senha em instantes.'
       );
     } finally {
       setLoading(false);
@@ -131,13 +177,15 @@ export function AuthDialog({
         {/* Cabeçalho */}
         <div
           className={`flex items-center justify-between px-5 py-4 border-b ${
-            isDark ? 'border-slate-800 bg-slate-950/60' : 'border-slate-200 bg-slate-50'
+            isDark ? 'border-slate-800 bg-slate-950/70' : 'border-slate-200 bg-slate-50'
           }`}
         >
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 rounded-xl bg-orange-500/15 border border-orange-500/30 text-orange-400 flex items-center justify-center shrink-0">
               {activeMode === 'login' ? (
                 <ShieldCheck className="w-5 h-5" />
+              ) : activeMode === 'signup' ? (
+                <UserPlus className="w-5 h-5" />
               ) : (
                 <KeyRound className="w-5 h-5" />
               )}
@@ -147,11 +195,15 @@ export function AuthDialog({
                 {activeMode === 'recovery'
                   ? 'Definir Nova Senha'
                   : activeMode === 'forgot'
-                  ? 'Recuperar Acesso Admin'
-                  : 'Acesso Administrativo'}
+                  ? 'Recuperar Acesso'
+                  : activeMode === 'signup'
+                  ? 'Cadastro de Usuário Comum'
+                  : 'Entrar no Movare WMS'}
               </h2>
-              <p className="text-[11px] text-slate-400">
-                Movare Localizador · Mapa Central Sincronizado
+              <p className={`text-[11px] ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                {activeMode === 'signup'
+                  ? 'Crie sua conta para receber um cargo do Administrador'
+                  : 'Acesso por cargo · Permissões aplicadas automaticamente'}
               </p>
             </div>
           </div>
@@ -159,12 +211,52 @@ export function AuthDialog({
           <button
             type="button"
             onClick={handleReturnPublic}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
+            className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
+              isDark ? 'text-slate-400 hover:text-white hover:bg-slate-800' : 'text-slate-500 hover:text-slate-900 hover:bg-slate-200'
+            }`}
             title="Fechar e voltar ao mapa público"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
+
+        {/* Abas Entrar / Criar Conta */}
+        {(activeMode === 'login' || activeMode === 'signup') && onSignUp && (
+          <div
+            className={`grid grid-cols-2 gap-1 px-5 py-2 border-b text-xs ${
+              isDark ? 'border-slate-800 bg-slate-950/40' : 'border-slate-200 bg-slate-50/70'
+            }`}
+          >
+            <button
+              type="button"
+              onClick={() => switchMode('login')}
+              className={`py-1.5 px-3 rounded-lg font-semibold flex items-center justify-center gap-1.5 cursor-pointer transition-colors ${
+                activeMode === 'login'
+                  ? 'bg-orange-600 text-white'
+                  : isDark
+                  ? 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/70'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/70'
+              }`}
+            >
+              <ShieldCheck className="w-3.5 h-3.5" />
+              <span>Entrar</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => switchMode('signup')}
+              className={`py-1.5 px-3 rounded-lg font-semibold flex items-center justify-center gap-1.5 cursor-pointer transition-colors ${
+                activeMode === 'signup'
+                  ? 'bg-orange-600 text-white'
+                  : isDark
+                  ? 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/70'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/70'
+              }`}
+            >
+              <UserPlus className="w-3.5 h-3.5" />
+              <span>Criar Conta</span>
+            </button>
+          </div>
+        )}
 
         <div className="p-5 space-y-4">
           {!isConfigured && (
@@ -197,8 +289,8 @@ export function AuthDialog({
           {activeMode === 'login' && (
             <form onSubmit={handleSubmitLogin} className="space-y-3.5">
               <div>
-                <label className="block text-[11px] font-semibold text-slate-400 mb-1">
-                  E-mail do Administrador
+                <label className={`block text-[11px] font-semibold mb-1 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
+                  E-mail Corporativo
                 </label>
                 <div className="relative">
                   <Mail className="w-4 h-4 text-slate-500 absolute left-3 top-2.5" />
@@ -209,7 +301,7 @@ export function AuthDialog({
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     disabled={!isConfigured || loading}
-                    placeholder="admin@empresa.com.br"
+                    placeholder="usuario@empresa.com.br"
                     className={`w-full pl-9 pr-3 py-2 text-sm rounded-xl border focus:outline-none focus:border-orange-500 transition-colors ${
                       isDark
                         ? 'bg-slate-950 border-slate-700 text-slate-100 placeholder:text-slate-600'
@@ -220,7 +312,7 @@ export function AuthDialog({
               </div>
 
               <div>
-                <label className="block text-[11px] font-semibold text-slate-400 mb-1">
+                <label className={`block text-[11px] font-semibold mb-1 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
                   Senha
                 </label>
                 <div className="relative">
@@ -253,16 +345,12 @@ export function AuthDialog({
               <div className="flex items-center justify-between pt-0.5">
                 <button
                   type="button"
-                  onClick={() => {
-                    setErrorMsg(null);
-                    setInfoMsg(null);
-                    setMode('forgot');
-                  }}
+                  onClick={() => switchMode('forgot')}
                   className="text-xs text-orange-400 hover:text-orange-300 font-medium cursor-pointer"
                 >
                   Esqueci minha senha
                 </button>
-                <span className="text-[10px] text-slate-500 font-mono">RLS Protegido</span>
+                <span className="text-[10px] text-slate-500 font-mono">RLS + Cargos</span>
               </div>
 
               <button
@@ -278,7 +366,129 @@ export function AuthDialog({
                 ) : (
                   <>
                     <ShieldCheck className="w-4 h-4" />
-                    <span>Entrar como Administrador</span>
+                    <span>Entrar no Sistema</span>
+                  </>
+                )}
+              </button>
+            </form>
+          )}
+
+          {activeMode === 'signup' && (
+            <form onSubmit={handleSubmitSignUp} className="space-y-3">
+              <div
+                className={`p-2.5 rounded-xl border text-[11px] leading-relaxed ${
+                  isDark
+                    ? 'bg-sky-500/10 border-sky-500/30 text-sky-200'
+                    : 'bg-sky-50 border-sky-200 text-sky-900'
+                }`}
+              >
+                Novas contas são criadas como <strong>Usuário Comum</strong> (somente consulta). Assim que um Administrador
+                atribuir um cargo para o seu e-mail, suas permissões serão liberadas automaticamente.
+              </div>
+
+              <div>
+                <label className={`block text-[11px] font-semibold mb-1 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
+                  Nome Completo
+                </label>
+                <div className="relative">
+                  <User className="w-4 h-4 text-slate-500 absolute left-3 top-2.5" />
+                  <input
+                    type="text"
+                    required
+                    autoComplete="name"
+                    value={fullName}
+                    onChange={(e) => setFullName(e.target.value)}
+                    disabled={!isConfigured || loading}
+                    placeholder="Ex: João da Silva"
+                    className={`w-full pl-9 pr-3 py-2 text-sm rounded-xl border focus:outline-none focus:border-orange-500 transition-colors ${
+                      isDark
+                        ? 'bg-slate-950 border-slate-700 text-slate-100 placeholder:text-slate-600'
+                        : 'bg-slate-50 border-slate-300 text-slate-900'
+                    }`}
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className={`block text-[11px] font-semibold mb-1 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
+                  E-mail Corporativo
+                </label>
+                <div className="relative">
+                  <Mail className="w-4 h-4 text-slate-500 absolute left-3 top-2.5" />
+                  <input
+                    type="email"
+                    required
+                    autoComplete="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    disabled={!isConfigured || loading}
+                    placeholder="colaborador@empresa.com.br"
+                    className={`w-full pl-9 pr-3 py-2 text-sm rounded-xl border focus:outline-none focus:border-orange-500 transition-colors ${
+                      isDark
+                        ? 'bg-slate-950 border-slate-700 text-slate-100 placeholder:text-slate-600'
+                        : 'bg-slate-50 border-slate-300 text-slate-900'
+                    }`}
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                <div>
+                  <label className={`block text-[11px] font-semibold mb-1 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
+                    Senha (mín. 6)
+                  </label>
+                  <input
+                    type={showPassword ? 'text' : 'password'}
+                    required
+                    minLength={6}
+                    autoComplete="new-password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    disabled={!isConfigured || loading}
+                    placeholder="••••••••"
+                    className={`w-full px-3 py-2 text-sm rounded-xl border focus:outline-none focus:border-orange-500 ${
+                      isDark
+                        ? 'bg-slate-950 border-slate-700 text-slate-100 placeholder:text-slate-600'
+                        : 'bg-slate-50 border-slate-300 text-slate-900'
+                    }`}
+                  />
+                </div>
+                <div>
+                  <label className={`block text-[11px] font-semibold mb-1 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
+                    Confirmar Senha
+                  </label>
+                  <input
+                    type={showPassword ? 'text' : 'password'}
+                    required
+                    minLength={6}
+                    autoComplete="new-password"
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    disabled={!isConfigured || loading}
+                    placeholder="••••••••"
+                    className={`w-full px-3 py-2 text-sm rounded-xl border focus:outline-none focus:border-orange-500 ${
+                      isDark
+                        ? 'bg-slate-950 border-slate-700 text-slate-100 placeholder:text-slate-600'
+                        : 'bg-slate-50 border-slate-300 text-slate-900'
+                    }`}
+                  />
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                disabled={!isConfigured || loading}
+                className="w-full py-2.5 px-4 rounded-xl bg-orange-600 hover:bg-orange-500 disabled:opacity-50 text-white font-bold text-xs sm:text-sm shadow-lg shadow-orange-950/40 flex items-center justify-center gap-2 transition-all cursor-pointer"
+              >
+                {loading ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>Criando conta...</span>
+                  </>
+                ) : (
+                  <>
+                    <UserPlus className="w-4 h-4" />
+                    <span>Cadastrar como Usuário Comum</span>
                   </>
                 )}
               </button>
@@ -287,8 +497,8 @@ export function AuthDialog({
 
           {activeMode === 'forgot' && (
             <form onSubmit={handleSubmitForgot} className="space-y-3.5">
-              <p className="text-xs text-slate-400 leading-relaxed">
-                Informe seu e-mail administrativo cadastrado no Supabase para receber o link de redefinição de senha.
+              <p className={`text-xs leading-relaxed ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
+                Informe seu e-mail cadastrado no Supabase para receber o link de redefinição de senha.
               </p>
               <div>
                 <label className="block text-[11px] font-semibold text-slate-400 mb-1">
@@ -313,11 +523,7 @@ export function AuthDialog({
               <div className="flex gap-2">
                 <button
                   type="button"
-                  onClick={() => {
-                    setErrorMsg(null);
-                    setInfoMsg(null);
-                    setMode('login');
-                  }}
+                  onClick={() => switchMode('login')}
                   className="px-3.5 py-2 rounded-xl border border-slate-700 text-slate-300 hover:bg-slate-800 text-xs font-semibold cursor-pointer"
                 >
                   Voltar ao Login
@@ -376,7 +582,7 @@ export function AuthDialog({
               <ArrowLeft className="w-3.5 h-3.5" />
               <span>Voltar à Visualização Pública</span>
             </button>
-            <span className="text-[10px] text-slate-500">Sem cadastro admin público</span>
+            <span className="text-[10px] text-slate-500">Sem privilégios no cadastro</span>
           </div>
         </div>
       </div>
