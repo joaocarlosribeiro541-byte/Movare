@@ -35,9 +35,9 @@ const LOADING_PHASES: LoadingPhase[] = [
   },
 ];
 
-const TOTAL_PROGRESS_MS = 3550;
-const HOLD_COMPLETE_MS = 320;
-const FADE_OUT_MS = 480;
+const TOTAL_PROGRESS_MS = 4700;
+const HOLD_COMPLETE_MS = 450;
+const FADE_OUT_MS = 500;
 
 function easeOutCubic(t: number): number {
   return 1 - Math.pow(1 - t, 3);
@@ -51,37 +51,71 @@ export function MovareSplashScreen({ onFinished, isDark = true }: MovareSplashSc
 
   useEffect(() => {
     let rafId = 0;
+    let intervalId: ReturnType<typeof setInterval> | undefined;
     let fadeTimer: ReturnType<typeof setTimeout> | undefined;
     let doneTimer: ReturnType<typeof setTimeout> | undefined;
+    let completionScheduled = false;
+    let finishedCalled = false;
     const startTime = performance.now();
 
-    const tick = (now: number) => {
-      const elapsed = now - startTime;
+    const finishOnce = () => {
+      if (finishedCalled) return;
+      finishedCalled = true;
+      onFinishedRef.current();
+    };
+
+    const scheduleCompletion = () => {
+      if (completionScheduled) return;
+      completionScheduled = true;
+      setProgress(100);
+      if (intervalId) {
+        clearInterval(intervalId);
+        intervalId = undefined;
+      }
+      fadeTimer = setTimeout(() => {
+        setIsFadingOut(true);
+      }, HOLD_COMPLETE_MS);
+      doneTimer = setTimeout(() => {
+        finishOnce();
+      }, HOLD_COMPLETE_MS + FADE_OUT_MS);
+    };
+
+    const updateProgress = () => {
+      const elapsed = performance.now() - startTime;
       const rawRatio = Math.min(1, elapsed / TOTAL_PROGRESS_MS);
       const eased = easeOutCubic(rawRatio);
       const nextProgress = Math.min(100, Math.round(eased * 100));
 
       setProgress(nextProgress);
 
-      if (rawRatio < 1) {
+      if (rawRatio >= 1) {
+        scheduleCompletion();
+        return true;
+      }
+      return false;
+    };
+
+    const tick = () => {
+      if (!updateProgress()) {
         rafId = requestAnimationFrame(tick);
-      } else {
-        setProgress(100);
-        fadeTimer = setTimeout(() => {
-          setIsFadingOut(true);
-        }, HOLD_COMPLETE_MS);
-        doneTimer = setTimeout(() => {
-          onFinishedRef.current();
-        }, HOLD_COMPLETE_MS + FADE_OUT_MS);
       }
     };
 
     rafId = requestAnimationFrame(tick);
+    // Fallback para abas/iframes em segundo plano onde rAF pode ser limitado
+    intervalId = setInterval(() => {
+      updateProgress();
+    }, 120);
+    const hardFallbackTimer = setTimeout(() => {
+      scheduleCompletion();
+    }, TOTAL_PROGRESS_MS + 100);
 
     return () => {
       cancelAnimationFrame(rafId);
+      if (intervalId) clearInterval(intervalId);
       if (fadeTimer) clearTimeout(fadeTimer);
       if (doneTimer) clearTimeout(doneTimer);
+      clearTimeout(hardFallbackTimer);
     };
   }, []);
 

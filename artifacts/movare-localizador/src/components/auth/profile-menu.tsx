@@ -10,6 +10,7 @@ import {
   Cloud,
   CloudOff,
   Eye,
+  Info,
   Layers,
   Loader2,
   LogOut,
@@ -35,7 +36,7 @@ import {
 import type { RealtimeConnectionStatus } from '../../lib/map-service';
 import type { CloudSyncStatus } from '../../hooks/use-shared-map';
 
-export type AccessPanelTab = 'profile' | 'overview' | 'team' | 'roles';
+export type AccessPanelTab = 'profile' | 'overview' | 'team' | 'roles' | 'about';
 
 type ProfileMenuProps = {
   isDark: boolean;
@@ -697,8 +698,20 @@ export function ProfileMenu({
             </>
           )}
 
-          {/* RODAPÉ: TEMA E SAIR */}
+          {/* RODAPÉ: SOBRE O APP, TEMA E SAIR */}
           <div className="space-y-0.5">
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => runAndClose(() => onOpenAccessPanelTab('about'))}
+              className={menuItemClass}
+            >
+              <span className="flex items-center gap-2">
+                <Info className="w-3.5 h-3.5 text-red-500 shrink-0" />
+                <span>Sobre o App &amp; Demonstração</span>
+              </span>
+            </button>
+
             <button
               type="button"
               role="menuitem"

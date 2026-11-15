@@ -11,6 +11,7 @@ import {
   CloudOff,
   Copy,
   Eye,
+  Info,
   KeyRound,
   Loader2,
   LogIn,
@@ -54,13 +55,17 @@ import {
 import type { RealtimeConnectionStatus } from '../../lib/map-service';
 import type { CloudSyncStatus } from '../../hooks/use-shared-map';
 import { RESERVATION_CLOUD_INFO_MSG } from '../permissions/permission-guard';
+import type { FloorArea } from '../../editor-model';
 import type { AccessPanelTab } from './profile-menu';
+import { AboutAppTab } from './about-app-tab';
 
 type AdminPanelDialogProps = {
   isOpen: boolean;
   initialTab?: AccessPanelTab;
   onClose: () => void;
   isDark: boolean;
+  areas?: FloorArea[];
+  activeAreaId?: string;
   isConfigured: boolean;
   configError: string | null;
   user: User | null;
@@ -247,6 +252,8 @@ export function AdminPanelDialog({
   initialTab = 'overview',
   onClose,
   isDark,
+  areas,
+  activeAreaId,
   isConfigured,
   configError,
   user,
@@ -740,6 +747,7 @@ export function AdminPanelDialog({
           { id: 'roles' as const, label: 'Cargos', icon: Tags },
         ]
       : []),
+    { id: 'about' as const, label: 'Sobre o App', icon: Info },
   ];
 
   const surfaceBoxClass = isDark
@@ -759,7 +767,9 @@ export function AdminPanelDialog({
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className={`w-full max-w-2xl max-h-[90dvh] flex flex-col rounded-2xl border shadow-2xl overflow-hidden ${
+        className={`w-full ${
+          activeTab === 'about' ? 'max-w-5xl' : 'max-w-2xl'
+        } max-h-[90dvh] flex flex-col rounded-2xl border shadow-2xl overflow-hidden transition-[max-width] duration-200 ${
           isDark
             ? 'bg-slate-900/95 border-slate-700/80 text-slate-100 shadow-black/80'
             : 'bg-white border-slate-200 text-slate-900 shadow-slate-400/30'
@@ -783,6 +793,8 @@ export function AdminPanelDialog({
                   ? 'Gerenciamento de Membros'
                   : activeTab === 'roles'
                   ? 'Cargos & Matriz de Permissões'
+                  : activeTab === 'about'
+                  ? 'Sobre o App · Guia & Demonstração'
                   : 'Central de Acesso & Nuvem'}
               </h3>
               <p className={`text-[11px] truncate ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
@@ -1725,6 +1737,8 @@ export function AdminPanelDialog({
                 </div>
               </div>
             </div>
+          ) : activeTab === 'about' ? (
+            <AboutAppTab isDark={isDark} areas={areas} activeAreaId={activeAreaId} />
           ) : (
             <div className="p-5 space-y-4 text-xs">
               {/* Bloco de Identidade & Permissão */}

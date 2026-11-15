@@ -1,13 +1,23 @@
 import { useState, type FormEvent } from 'react';
 import {
-  X, ShieldCheck, Mail, Lock, Loader2, ArrowLeft,
-  KeyRound, CheckCircle2, AlertTriangle, Eye, EyeOff, UserPlus, User
+  X,
+  ShieldCheck,
+  Mail,
+  Lock,
+  Loader2,
+  ArrowLeft,
+  KeyRound,
+  CheckCircle2,
+  AlertTriangle,
+  Eye,
+  EyeOff,
+  UserPlus,
+  User,
+  Info,
 } from 'lucide-react';
 import type { AuthSignUpResult, UserRole } from '../../lib/auth';
 
-type AuthDialogProps = {
-  isOpen: boolean;
-  onClose: () => void;
+export type AuthCardProps = {
   isConfigured: boolean;
   configError: string | null;
   isDark: boolean;
@@ -18,11 +28,14 @@ type AuthDialogProps = {
   onRequestPasswordReset: (email: string) => Promise<{ ok: boolean; error?: string }>;
   onCompletePasswordRecovery: (newPassword: string) => Promise<{ ok: boolean; error?: string }>;
   onClearPasswordRecovery: () => void;
+  onSuccess?: () => void;
+  onClose?: () => void;
+  variant?: 'modal' | 'screen';
+  onEnterAsVisitor?: () => void;
+  onOpenAbout?: () => void;
 };
 
-export function AuthDialog({
-  isOpen,
-  onClose,
+export function AuthCard({
   isConfigured,
   configError,
   isDark,
@@ -33,7 +46,12 @@ export function AuthDialog({
   onRequestPasswordReset,
   onCompletePasswordRecovery,
   onClearPasswordRecovery,
-}: AuthDialogProps) {
+  onSuccess,
+  onClose,
+  variant = 'modal',
+  onEnterAsVisitor,
+  onOpenAbout,
+}: AuthCardProps) {
   const [mode, setMode] = useState<'login' | 'signup' | 'forgot' | 'recovery'>(
     passwordRecoveryPending ? 'recovery' : 'login'
   );
@@ -47,9 +65,8 @@ export function AuthDialog({
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [infoMsg, setInfoMsg] = useState<string | null>(null);
 
-  if (!isOpen && !passwordRecoveryPending) return null;
-
   const activeMode = passwordRecoveryPending ? 'recovery' : mode;
+  const isScreen = variant === 'screen';
 
   const switchMode = (nextMode: 'login' | 'signup' | 'forgot') => {
     setErrorMsg(null);
@@ -69,7 +86,8 @@ export function AuthDialog({
         return;
       }
       setPassword('');
-      onClose();
+      onSuccess?.();
+      onClose?.();
     } finally {
       setLoading(false);
     }
@@ -109,7 +127,8 @@ export function AuthDialog({
       }
       setFullName('');
       onSignedUpCommonUser?.(false);
-      onClose();
+      onSuccess?.();
+      onClose?.();
     } finally {
       setLoading(false);
     }
@@ -147,7 +166,8 @@ export function AuthDialog({
       }
       setNewPassword('');
       setMode('login');
-      onClose();
+      onSuccess?.();
+      onClose?.();
     } finally {
       setLoading(false);
     }
@@ -158,434 +178,555 @@ export function AuthDialog({
     setInfoMsg(null);
     setMode('login');
     if (passwordRecoveryPending) onClearPasswordRecovery();
-    onClose();
+    if (isScreen) {
+      onEnterAsVisitor?.();
+    } else {
+      onClose?.();
+    }
   };
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md"
-      onClick={handleReturnPublic}
+      onClick={(e) => e.stopPropagation()}
+      className={`w-full max-w-md rounded-2xl border shadow-2xl overflow-hidden transition-all ${
+        isDark
+          ? 'bg-slate-900/95 border-slate-700/80 text-slate-100 shadow-black/70'
+          : 'bg-white border-slate-200 text-slate-900 shadow-slate-400/25'
+      }`}
     >
+      {/* Cabeçalho */}
       <div
-        onClick={(e) => e.stopPropagation()}
-        className={`w-full max-w-md rounded-2xl border shadow-2xl overflow-hidden transition-all ${
-          isDark
-            ? 'bg-slate-900/95 border-slate-700/80 text-slate-100 shadow-black/80'
-            : 'bg-white border-slate-200 text-slate-900 shadow-slate-400/30'
+        className={`flex items-center justify-between px-5 py-4 border-b ${
+          isDark ? 'border-slate-800 bg-slate-950/70' : 'border-slate-200 bg-slate-50'
         }`}
       >
-        {/* Cabeçalho */}
-        <div
-          className={`flex items-center justify-between px-5 py-4 border-b ${
-            isDark ? 'border-slate-800 bg-slate-950/70' : 'border-slate-200 bg-slate-50'
-          }`}
-        >
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-orange-500/15 border border-orange-500/30 text-orange-400 flex items-center justify-center shrink-0">
-              {activeMode === 'login' ? (
-                <ShieldCheck className="w-5 h-5" />
-              ) : activeMode === 'signup' ? (
-                <UserPlus className="w-5 h-5" />
-              ) : (
-                <KeyRound className="w-5 h-5" />
-              )}
-            </div>
-            <div>
-              <h2 className="text-sm sm:text-base font-bold tracking-tight">
-                {activeMode === 'recovery'
-                  ? 'Definir Nova Senha'
-                  : activeMode === 'forgot'
-                  ? 'Recuperar Acesso'
-                  : activeMode === 'signup'
-                  ? 'Cadastro de Usuário Comum'
-                  : 'Entrar no Movare WMS'}
-              </h2>
-              <p className={`text-[11px] ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-                {activeMode === 'signup'
-                  ? 'Crie sua conta para receber um cargo do Administrador'
-                  : 'Acesso por cargo · Permissões aplicadas automaticamente'}
-              </p>
-            </div>
+        <div className="flex items-center gap-3 min-w-0">
+          <div className="w-9 h-9 rounded-xl bg-red-500/15 border border-red-500/30 text-red-500 flex items-center justify-center shrink-0">
+            {activeMode === 'login' ? (
+              <ShieldCheck className="w-5 h-5" />
+            ) : activeMode === 'signup' ? (
+              <UserPlus className="w-5 h-5" />
+            ) : (
+              <KeyRound className="w-5 h-5" />
+            )}
           </div>
+          <div className="min-w-0">
+            <h2 className="text-sm sm:text-base font-bold tracking-tight truncate">
+              {activeMode === 'recovery'
+                ? 'Definir Nova Senha'
+                : activeMode === 'forgot'
+                ? 'Recuperar Acesso'
+                : activeMode === 'signup'
+                ? 'Cadastro de Usuário Comum'
+                : 'Entrar no Movare WMS'}
+            </h2>
+            <p className={`text-[11px] truncate ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+              {activeMode === 'signup'
+                ? 'Crie sua conta para receber um cargo do Administrador'
+                : 'Acesso por cargo · Permissões aplicadas automaticamente'}
+            </p>
+          </div>
+        </div>
 
+        {!isScreen && onClose && (
           <button
             type="button"
             onClick={handleReturnPublic}
-            className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
+            className={`p-1.5 rounded-lg transition-colors cursor-pointer shrink-0 ${
               isDark ? 'text-slate-400 hover:text-white hover:bg-slate-800' : 'text-slate-500 hover:text-slate-900 hover:bg-slate-200'
             }`}
             title="Fechar e voltar ao mapa público"
           >
             <X className="w-4 h-4" />
           </button>
-        </div>
+        )}
+      </div>
 
-        {/* Abas Entrar / Criar Conta */}
-        {(activeMode === 'login' || activeMode === 'signup') && onSignUp && (
-          <div
-            className={`grid grid-cols-2 gap-1 px-5 py-2 border-b text-xs ${
-              isDark ? 'border-slate-800 bg-slate-950/40' : 'border-slate-200 bg-slate-50/70'
+      {/* Abas Entrar / Criar Conta */}
+      {(activeMode === 'login' || activeMode === 'signup') && onSignUp && (
+        <div
+          className={`grid grid-cols-2 gap-1 px-5 py-2 border-b text-xs ${
+            isDark ? 'border-slate-800 bg-slate-950/40' : 'border-slate-200 bg-slate-50/70'
+          }`}
+        >
+          <button
+            type="button"
+            onClick={() => switchMode('login')}
+            className={`py-1.5 px-3 rounded-lg font-semibold flex items-center justify-center gap-1.5 cursor-pointer transition-colors ${
+              activeMode === 'login'
+                ? 'bg-red-600 text-white'
+                : isDark
+                ? 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/70'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/70'
             }`}
           >
-            <button
-              type="button"
-              onClick={() => switchMode('login')}
-              className={`py-1.5 px-3 rounded-lg font-semibold flex items-center justify-center gap-1.5 cursor-pointer transition-colors ${
-                activeMode === 'login'
-                  ? 'bg-orange-600 text-white'
-                  : isDark
-                  ? 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/70'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/70'
-              }`}
-            >
-              <ShieldCheck className="w-3.5 h-3.5" />
-              <span>Entrar</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => switchMode('signup')}
-              className={`py-1.5 px-3 rounded-lg font-semibold flex items-center justify-center gap-1.5 cursor-pointer transition-colors ${
-                activeMode === 'signup'
-                  ? 'bg-orange-600 text-white'
-                  : isDark
-                  ? 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/70'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/70'
-              }`}
-            >
-              <UserPlus className="w-3.5 h-3.5" />
-              <span>Criar Conta</span>
-            </button>
+            <ShieldCheck className="w-3.5 h-3.5" />
+            <span>Entrar</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => switchMode('signup')}
+            className={`py-1.5 px-3 rounded-lg font-semibold flex items-center justify-center gap-1.5 cursor-pointer transition-colors ${
+              activeMode === 'signup'
+                ? 'bg-red-600 text-white'
+                : isDark
+                ? 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/70'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/70'
+            }`}
+          >
+            <UserPlus className="w-3.5 h-3.5" />
+            <span>Criar Conta</span>
+          </button>
+        </div>
+      )}
+
+      <div className="p-5 space-y-4">
+        {!isConfigured && (
+          <div
+            className={`p-3 rounded-xl border text-xs flex items-start gap-2.5 ${
+              isDark
+                ? 'border-amber-500/40 bg-amber-500/10 text-amber-200'
+                : 'border-amber-300 bg-amber-50 text-amber-950'
+            }`}
+          >
+            <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
+            <div className="space-y-1">
+              <strong className="block font-semibold">Supabase ainda não configurado</strong>
+              <span className="text-[11px] opacity-90 block">
+                {configError ||
+                  'Configure VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY para habilitar autenticação e nuvem centralizada.'}
+              </span>
+            </div>
           </div>
         )}
 
-        <div className="p-5 space-y-4">
-          {!isConfigured && (
-            <div className="p-3 rounded-xl border border-amber-500/40 bg-amber-500/10 text-amber-200 text-xs flex items-start gap-2.5">
-              <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
-              <div className="space-y-1">
-                <strong className="block font-semibold">Supabase ainda não configurado</strong>
-                <span className="text-[11px] opacity-90 block">
-                  {configError ||
-                    'Configure VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY para habilitar autenticação e nuvem centralizada.'}
-                </span>
-              </div>
-            </div>
-          )}
+        {errorMsg && (
+          <div
+            className={`p-3 rounded-xl border text-xs flex items-start gap-2 ${
+              isDark
+                ? 'border-rose-500/40 bg-rose-500/10 text-rose-300'
+                : 'border-rose-300 bg-rose-50 text-rose-800'
+            }`}
+          >
+            <AlertTriangle className="w-4 h-4 text-rose-500 shrink-0 mt-0.5" />
+            <span>{errorMsg}</span>
+          </div>
+        )}
 
-          {errorMsg && (
-            <div className="p-3 rounded-xl border border-rose-500/40 bg-rose-500/10 text-rose-300 text-xs flex items-start gap-2">
-              <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
-              <span>{errorMsg}</span>
-            </div>
-          )}
+        {infoMsg && (
+          <div
+            className={`p-3 rounded-xl border text-xs flex items-start gap-2 ${
+              isDark
+                ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300'
+                : 'border-emerald-300 bg-emerald-50 text-emerald-800'
+            }`}
+          >
+            <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0 mt-0.5" />
+            <span>{infoMsg}</span>
+          </div>
+        )}
 
-          {infoMsg && (
-            <div className="p-3 rounded-xl border border-emerald-500/40 bg-emerald-500/10 text-emerald-300 text-xs flex items-start gap-2">
-              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
-              <span>{infoMsg}</span>
-            </div>
-          )}
-
-          {activeMode === 'login' && (
-            <form onSubmit={handleSubmitLogin} className="space-y-3.5">
-              <div>
-                <label className={`block text-[11px] font-semibold mb-1 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
-                  E-mail Corporativo
-                </label>
-                <div className="relative">
-                  <Mail className="w-4 h-4 text-slate-500 absolute left-3 top-2.5" />
-                  <input
-                    type="email"
-                    required
-                    autoComplete="email"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    disabled={!isConfigured || loading}
-                    placeholder="usuario@empresa.com.br"
-                    className={`w-full pl-9 pr-3 py-2 text-sm rounded-xl border focus:outline-none focus:border-orange-500 transition-colors ${
-                      isDark
-                        ? 'bg-slate-950 border-slate-700 text-slate-100 placeholder:text-slate-600'
-                        : 'bg-slate-50 border-slate-300 text-slate-900'
-                    }`}
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className={`block text-[11px] font-semibold mb-1 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
-                  Senha
-                </label>
-                <div className="relative">
-                  <Lock className="w-4 h-4 text-slate-500 absolute left-3 top-2.5" />
-                  <input
-                    type={showPassword ? 'text' : 'password'}
-                    required
-                    autoComplete="current-password"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    disabled={!isConfigured || loading}
-                    placeholder="••••••••"
-                    className={`w-full pl-9 pr-10 py-2 text-sm rounded-xl border focus:outline-none focus:border-orange-500 transition-colors ${
-                      isDark
-                        ? 'bg-slate-950 border-slate-700 text-slate-100 placeholder:text-slate-600'
-                        : 'bg-slate-50 border-slate-300 text-slate-900'
-                    }`}
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowPassword((prev) => !prev)}
-                    className="absolute right-2.5 top-2 p-0.5 text-slate-500 hover:text-slate-300"
-                    tabIndex={-1}
-                  >
-                    {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                  </button>
-                </div>
-              </div>
-
-              <div className="flex items-center justify-between pt-0.5">
-                <button
-                  type="button"
-                  onClick={() => switchMode('forgot')}
-                  className="text-xs text-orange-400 hover:text-orange-300 font-medium cursor-pointer"
-                >
-                  Esqueci minha senha
-                </button>
-                <span className="text-[10px] text-slate-500 font-mono">RLS + Cargos</span>
-              </div>
-
-              <button
-                type="submit"
-                disabled={!isConfigured || loading}
-                className="w-full py-2.5 px-4 rounded-xl bg-orange-600 hover:bg-orange-500 disabled:opacity-50 text-white font-bold text-xs sm:text-sm shadow-lg shadow-orange-950/40 flex items-center justify-center gap-2 transition-all cursor-pointer"
-              >
-                {loading ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    <span>Verificando credenciais...</span>
-                  </>
-                ) : (
-                  <>
-                    <ShieldCheck className="w-4 h-4" />
-                    <span>Entrar no Sistema</span>
-                  </>
-                )}
-              </button>
-            </form>
-          )}
-
-          {activeMode === 'signup' && (
-            <form onSubmit={handleSubmitSignUp} className="space-y-3">
-              <div
-                className={`p-2.5 rounded-xl border text-[11px] leading-relaxed ${
-                  isDark
-                    ? 'bg-sky-500/10 border-sky-500/30 text-sky-200'
-                    : 'bg-sky-50 border-sky-200 text-sky-900'
-                }`}
-              >
-                Novas contas são criadas como <strong>Usuário Comum</strong> (somente consulta). Assim que um Administrador
-                atribuir um cargo para o seu e-mail, suas permissões serão liberadas automaticamente.
-              </div>
-
-              <div>
-                <label className={`block text-[11px] font-semibold mb-1 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
-                  Nome Completo
-                </label>
-                <div className="relative">
-                  <User className="w-4 h-4 text-slate-500 absolute left-3 top-2.5" />
-                  <input
-                    type="text"
-                    required
-                    autoComplete="name"
-                    value={fullName}
-                    onChange={(e) => setFullName(e.target.value)}
-                    disabled={!isConfigured || loading}
-                    placeholder="Ex: João da Silva"
-                    className={`w-full pl-9 pr-3 py-2 text-sm rounded-xl border focus:outline-none focus:border-orange-500 transition-colors ${
-                      isDark
-                        ? 'bg-slate-950 border-slate-700 text-slate-100 placeholder:text-slate-600'
-                        : 'bg-slate-50 border-slate-300 text-slate-900'
-                    }`}
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className={`block text-[11px] font-semibold mb-1 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
-                  E-mail Corporativo
-                </label>
-                <div className="relative">
-                  <Mail className="w-4 h-4 text-slate-500 absolute left-3 top-2.5" />
-                  <input
-                    type="email"
-                    required
-                    autoComplete="email"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    disabled={!isConfigured || loading}
-                    placeholder="colaborador@empresa.com.br"
-                    className={`w-full pl-9 pr-3 py-2 text-sm rounded-xl border focus:outline-none focus:border-orange-500 transition-colors ${
-                      isDark
-                        ? 'bg-slate-950 border-slate-700 text-slate-100 placeholder:text-slate-600'
-                        : 'bg-slate-50 border-slate-300 text-slate-900'
-                    }`}
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                <div>
-                  <label className={`block text-[11px] font-semibold mb-1 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
-                    Senha (mín. 6)
-                  </label>
-                  <input
-                    type={showPassword ? 'text' : 'password'}
-                    required
-                    minLength={6}
-                    autoComplete="new-password"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    disabled={!isConfigured || loading}
-                    placeholder="••••••••"
-                    className={`w-full px-3 py-2 text-sm rounded-xl border focus:outline-none focus:border-orange-500 ${
-                      isDark
-                        ? 'bg-slate-950 border-slate-700 text-slate-100 placeholder:text-slate-600'
-                        : 'bg-slate-50 border-slate-300 text-slate-900'
-                    }`}
-                  />
-                </div>
-                <div>
-                  <label className={`block text-[11px] font-semibold mb-1 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
-                    Confirmar Senha
-                  </label>
-                  <input
-                    type={showPassword ? 'text' : 'password'}
-                    required
-                    minLength={6}
-                    autoComplete="new-password"
-                    value={confirmPassword}
-                    onChange={(e) => setConfirmPassword(e.target.value)}
-                    disabled={!isConfigured || loading}
-                    placeholder="••••••••"
-                    className={`w-full px-3 py-2 text-sm rounded-xl border focus:outline-none focus:border-orange-500 ${
-                      isDark
-                        ? 'bg-slate-950 border-slate-700 text-slate-100 placeholder:text-slate-600'
-                        : 'bg-slate-50 border-slate-300 text-slate-900'
-                    }`}
-                  />
-                </div>
-              </div>
-
-              <button
-                type="submit"
-                disabled={!isConfigured || loading}
-                className="w-full py-2.5 px-4 rounded-xl bg-orange-600 hover:bg-orange-500 disabled:opacity-50 text-white font-bold text-xs sm:text-sm shadow-lg shadow-orange-950/40 flex items-center justify-center gap-2 transition-all cursor-pointer"
-              >
-                {loading ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    <span>Criando conta...</span>
-                  </>
-                ) : (
-                  <>
-                    <UserPlus className="w-4 h-4" />
-                    <span>Cadastrar como Usuário Comum</span>
-                  </>
-                )}
-              </button>
-            </form>
-          )}
-
-          {activeMode === 'forgot' && (
-            <form onSubmit={handleSubmitForgot} className="space-y-3.5">
-              <p className={`text-xs leading-relaxed ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
-                Informe seu e-mail cadastrado no Supabase para receber o link de redefinição de senha.
-              </p>
-              <div>
-                <label className="block text-[11px] font-semibold text-slate-400 mb-1">
-                  E-mail Cadastrado
-                </label>
-                <div className="relative">
-                  <Mail className="w-4 h-4 text-slate-500 absolute left-3 top-2.5" />
-                  <input
-                    type="email"
-                    required
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    disabled={!isConfigured || loading}
-                    placeholder="admin@empresa.com.br"
-                    className={`w-full pl-9 pr-3 py-2 text-sm rounded-xl border focus:outline-none focus:border-orange-500 ${
-                      isDark ? 'bg-slate-950 border-slate-700 text-slate-100' : 'bg-slate-50 border-slate-300 text-slate-900'
-                    }`}
-                  />
-                </div>
-              </div>
-
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => switchMode('login')}
-                  className="px-3.5 py-2 rounded-xl border border-slate-700 text-slate-300 hover:bg-slate-800 text-xs font-semibold cursor-pointer"
-                >
-                  Voltar ao Login
-                </button>
-                <button
-                  type="submit"
+        {activeMode === 'login' && (
+          <form onSubmit={handleSubmitLogin} className="space-y-3.5">
+            <div>
+              <label className={`block text-[11px] font-semibold mb-1 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
+                E-mail Corporativo
+              </label>
+              <div className="relative">
+                <Mail className="w-4 h-4 text-slate-500 absolute left-3 top-2.5" />
+                <input
+                  type="email"
+                  required
+                  autoComplete="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
                   disabled={!isConfigured || loading}
-                  className="flex-1 py-2 px-4 rounded-xl bg-orange-600 hover:bg-orange-500 disabled:opacity-50 text-white font-bold text-xs flex items-center justify-center gap-2 cursor-pointer"
+                  placeholder="usuario@empresa.com.br"
+                  className={`w-full pl-9 pr-3 py-2 text-sm rounded-xl border focus:outline-none focus:border-red-500 transition-colors ${
+                    isDark
+                      ? 'bg-slate-950 border-slate-700 text-slate-100 placeholder:text-slate-600'
+                      : 'bg-slate-50 border-slate-300 text-slate-900'
+                  }`}
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className={`block text-[11px] font-semibold mb-1 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
+                Senha
+              </label>
+              <div className="relative">
+                <Lock className="w-4 h-4 text-slate-500 absolute left-3 top-2.5" />
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  required
+                  autoComplete="current-password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  disabled={!isConfigured || loading}
+                  placeholder="••••••••"
+                  className={`w-full pl-9 pr-10 py-2 text-sm rounded-xl border focus:outline-none focus:border-red-500 transition-colors ${
+                    isDark
+                      ? 'bg-slate-950 border-slate-700 text-slate-100 placeholder:text-slate-600'
+                      : 'bg-slate-50 border-slate-300 text-slate-900'
+                  }`}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((prev) => !prev)}
+                  className="absolute right-2.5 top-2 p-0.5 text-slate-500 hover:text-slate-300 cursor-pointer"
+                  tabIndex={-1}
                 >
-                  {loading && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                  <span>Enviar Link de Recuperação</span>
+                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                 </button>
               </div>
-            </form>
-          )}
+            </div>
 
-          {activeMode === 'recovery' && (
-            <form onSubmit={handleSubmitRecovery} className="space-y-3.5">
-              <p className="text-xs text-slate-400 leading-relaxed">
-                Link de recuperação validado. Digite abaixo a sua nova senha de acesso administrativo.
-              </p>
+            <div className="flex items-center justify-between pt-0.5">
+              <button
+                type="button"
+                onClick={() => switchMode('forgot')}
+                className="text-xs text-red-500 hover:text-red-400 font-medium cursor-pointer"
+              >
+                Esqueci minha senha
+              </button>
+              <span className="text-[10px] text-slate-500 font-mono">RLS · Cargos</span>
+            </div>
+
+            <button
+              type="submit"
+              disabled={!isConfigured || loading}
+              className="w-full py-2.5 px-4 rounded-xl bg-red-600 hover:bg-red-500 disabled:opacity-50 text-white font-bold text-xs sm:text-sm shadow-lg shadow-red-950/30 flex items-center justify-center gap-2 transition-all cursor-pointer"
+            >
+              {loading ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <span>Verificando credenciais...</span>
+                </>
+              ) : (
+                <>
+                  <ShieldCheck className="w-4 h-4" />
+                  <span>Entrar no Sistema</span>
+                </>
+              )}
+            </button>
+          </form>
+        )}
+
+        {activeMode === 'signup' && (
+          <form onSubmit={handleSubmitSignUp} className="space-y-3">
+            <div
+              className={`p-2.5 rounded-xl border text-[11px] leading-relaxed ${
+                isDark
+                  ? 'bg-sky-500/10 border-sky-500/30 text-sky-200'
+                  : 'bg-sky-50 border-sky-200 text-sky-900'
+              }`}
+            >
+              Novas contas são criadas como <strong>Usuário Comum</strong> (somente consulta). Assim que um Administrador
+              atribuir um cargo para o seu e-mail, suas permissões serão liberadas automaticamente.
+            </div>
+
+            <div>
+              <label className={`block text-[11px] font-semibold mb-1 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
+                Nome Completo
+              </label>
+              <div className="relative">
+                <User className="w-4 h-4 text-slate-500 absolute left-3 top-2.5" />
+                <input
+                  type="text"
+                  required
+                  autoComplete="name"
+                  value={fullName}
+                  onChange={(e) => setFullName(e.target.value)}
+                  disabled={!isConfigured || loading}
+                  placeholder="Ex: João da Silva"
+                  className={`w-full pl-9 pr-3 py-2 text-sm rounded-xl border focus:outline-none focus:border-red-500 transition-colors ${
+                    isDark
+                      ? 'bg-slate-950 border-slate-700 text-slate-100 placeholder:text-slate-600'
+                      : 'bg-slate-50 border-slate-300 text-slate-900'
+                  }`}
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className={`block text-[11px] font-semibold mb-1 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
+                E-mail Corporativo
+              </label>
+              <div className="relative">
+                <Mail className="w-4 h-4 text-slate-500 absolute left-3 top-2.5" />
+                <input
+                  type="email"
+                  required
+                  autoComplete="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  disabled={!isConfigured || loading}
+                  placeholder="colaborador@empresa.com.br"
+                  className={`w-full pl-9 pr-3 py-2 text-sm rounded-xl border focus:outline-none focus:border-red-500 transition-colors ${
+                    isDark
+                      ? 'bg-slate-950 border-slate-700 text-slate-100 placeholder:text-slate-600'
+                      : 'bg-slate-50 border-slate-300 text-slate-900'
+                  }`}
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
               <div>
-                <label className="block text-[11px] font-semibold text-slate-400 mb-1">
-                  Nova Senha (mínimo 6 caracteres)
+                <label className={`block text-[11px] font-semibold mb-1 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
+                  Senha (mín. 6)
                 </label>
                 <input
-                  type="password"
+                  type={showPassword ? 'text' : 'password'}
                   required
                   minLength={6}
-                  value={newPassword}
-                  onChange={(e) => setNewPassword(e.target.value)}
-                  disabled={loading}
-                  placeholder="Nova senha segura"
-                  className={`w-full px-3 py-2 text-sm rounded-xl border focus:outline-none focus:border-orange-500 ${
+                  autoComplete="new-password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  disabled={!isConfigured || loading}
+                  placeholder="••••••••"
+                  className={`w-full px-3 py-2 text-sm rounded-xl border focus:outline-none focus:border-red-500 ${
+                    isDark
+                      ? 'bg-slate-950 border-slate-700 text-slate-100 placeholder:text-slate-600'
+                      : 'bg-slate-50 border-slate-300 text-slate-900'
+                  }`}
+                />
+              </div>
+              <div>
+                <label className={`block text-[11px] font-semibold mb-1 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
+                  Confirmar Senha
+                </label>
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  required
+                  minLength={6}
+                  autoComplete="new-password"
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  disabled={!isConfigured || loading}
+                  placeholder="••••••••"
+                  className={`w-full px-3 py-2 text-sm rounded-xl border focus:outline-none focus:border-red-500 ${
+                    isDark
+                      ? 'bg-slate-950 border-slate-700 text-slate-100 placeholder:text-slate-600'
+                      : 'bg-slate-50 border-slate-300 text-slate-900'
+                  }`}
+                />
+              </div>
+            </div>
+
+            <button
+              type="submit"
+              disabled={!isConfigured || loading}
+              className="w-full py-2.5 px-4 rounded-xl bg-red-600 hover:bg-red-500 disabled:opacity-50 text-white font-bold text-xs sm:text-sm shadow-lg shadow-red-950/30 flex items-center justify-center gap-2 transition-all cursor-pointer"
+            >
+              {loading ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <span>Criando conta...</span>
+                </>
+              ) : (
+                <>
+                  <UserPlus className="w-4 h-4" />
+                  <span>Cadastrar como Usuário Comum</span>
+                </>
+              )}
+            </button>
+          </form>
+        )}
+
+        {activeMode === 'forgot' && (
+          <form onSubmit={handleSubmitForgot} className="space-y-3.5">
+            <p className={`text-xs leading-relaxed ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
+              Informe seu e-mail cadastrado no Supabase para receber o link de redefinição de senha.
+            </p>
+            <div>
+              <label className={`block text-[11px] font-semibold mb-1 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
+                E-mail Cadastrado
+              </label>
+              <div className="relative">
+                <Mail className="w-4 h-4 text-slate-500 absolute left-3 top-2.5" />
+                <input
+                  type="email"
+                  required
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  disabled={!isConfigured || loading}
+                  placeholder="admin@empresa.com.br"
+                  className={`w-full pl-9 pr-3 py-2 text-sm rounded-xl border focus:outline-none focus:border-red-500 ${
                     isDark ? 'bg-slate-950 border-slate-700 text-slate-100' : 'bg-slate-50 border-slate-300 text-slate-900'
                   }`}
                 />
               </div>
+            </div>
+
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => switchMode('login')}
+                className={`px-3.5 py-2 rounded-xl border text-xs font-semibold cursor-pointer ${
+                  isDark
+                    ? 'border-slate-700 text-slate-300 hover:bg-slate-800'
+                    : 'border-slate-300 text-slate-700 hover:bg-slate-100'
+                }`}
+              >
+                Voltar ao Login
+              </button>
               <button
                 type="submit"
-                disabled={loading}
-                className="w-full py-2.5 px-4 rounded-xl bg-orange-600 hover:bg-orange-500 disabled:opacity-50 text-white font-bold text-xs flex items-center justify-center gap-2 cursor-pointer"
+                disabled={!isConfigured || loading}
+                className="flex-1 py-2 px-4 rounded-xl bg-red-600 hover:bg-red-500 disabled:opacity-50 text-white font-bold text-xs flex items-center justify-center gap-2 cursor-pointer"
               >
-                {loading && <Loader2 className="w-4 h-4 animate-spin" />}
-                <span>Atualizar Senha</span>
+                {loading && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                <span>Enviar Link de Recuperação</span>
               </button>
-            </form>
-          )}
+            </div>
+          </form>
+        )}
 
-          <div className="pt-3 border-t border-slate-800/80 flex items-center justify-between gap-2">
+        {activeMode === 'recovery' && (
+          <form onSubmit={handleSubmitRecovery} className="space-y-3.5">
+            <p className={`text-xs leading-relaxed ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
+              Link de recuperação validado. Digite abaixo a sua nova senha de acesso administrativo.
+            </p>
+            <div>
+              <label className={`block text-[11px] font-semibold mb-1 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
+                Nova Senha (mínimo 6 caracteres)
+              </label>
+              <input
+                type="password"
+                required
+                minLength={6}
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                disabled={loading}
+                placeholder="Nova senha segura"
+                className={`w-full px-3 py-2 text-sm rounded-xl border focus:outline-none focus:border-red-500 ${
+                  isDark ? 'bg-slate-950 border-slate-700 text-slate-100' : 'bg-slate-50 border-slate-300 text-slate-900'
+                }`}
+              />
+            </div>
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full py-2.5 px-4 rounded-xl bg-red-600 hover:bg-red-500 disabled:opacity-50 text-white font-bold text-xs flex items-center justify-center gap-2 cursor-pointer"
+            >
+              {loading && <Loader2 className="w-4 h-4 animate-spin" />}
+              <span>Atualizar Senha</span>
+            </button>
+          </form>
+        )}
+
+        {/* Rodapé do Card */}
+        {isScreen ? (
+          <div
+            className={`pt-3.5 border-t ${
+              isDark ? 'border-slate-800/80' : 'border-slate-200'
+            }`}
+          >
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              {onEnterAsVisitor && (
+                <button
+                  type="button"
+                  onClick={handleReturnPublic}
+                  className={`py-2 px-3 rounded-xl border text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap ${
+                    isDark
+                      ? 'bg-slate-950 hover:bg-slate-800 border-slate-700 text-slate-200'
+                      : 'bg-slate-50 hover:bg-slate-100 border-slate-300 text-slate-800'
+                  }`}
+                >
+                  <Eye className="w-3.5 h-3.5 text-sky-500 shrink-0" />
+                  <span>Acessar como Visitante</span>
+                </button>
+              )}
+
+              {onOpenAbout && (
+                <button
+                  type="button"
+                  onClick={onOpenAbout}
+                  className={`py-2 px-3 rounded-xl border text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap ${
+                    isDark
+                      ? 'bg-slate-950 hover:bg-slate-800 border-slate-700 text-slate-200'
+                      : 'bg-slate-50 hover:bg-slate-100 border-slate-300 text-slate-800'
+                  }`}
+                >
+                  <Info className="w-3.5 h-3.5 text-red-500 shrink-0" />
+                  <span>Sobre o App</span>
+                </button>
+              )}
+            </div>
+          </div>
+        ) : (
+          <div
+            className={`pt-3 border-t flex items-center justify-between gap-2 ${
+              isDark ? 'border-slate-800/80' : 'border-slate-200'
+            }`}
+          >
             <button
               type="button"
               onClick={handleReturnPublic}
-              className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-slate-200 font-medium cursor-pointer"
+              className={`flex items-center gap-1.5 text-xs font-medium cursor-pointer ${
+                isDark ? 'text-slate-400 hover:text-slate-200' : 'text-slate-600 hover:text-slate-900'
+              }`}
             >
               <ArrowLeft className="w-3.5 h-3.5" />
               <span>Voltar à Visualização Pública</span>
             </button>
             <span className="text-[10px] text-slate-500">Sem privilégios no cadastro</span>
           </div>
-        </div>
+        )}
       </div>
+    </div>
+  );
+}
+
+type AuthDialogProps = Omit<AuthCardProps, 'variant' | 'onEnterAsVisitor' | 'onOpenAbout'> & {
+  isOpen: boolean;
+  onClose: () => void;
+};
+
+export function AuthDialog({
+  isOpen,
+  onClose,
+  isConfigured,
+  configError,
+  isDark,
+  passwordRecoveryPending,
+  onLogin,
+  onSignUp,
+  onSignedUpCommonUser,
+  onRequestPasswordReset,
+  onCompletePasswordRecovery,
+  onClearPasswordRecovery,
+  onSuccess,
+}: AuthDialogProps) {
+  if (!isOpen && !passwordRecoveryPending) return null;
+
+  const handleBackdropClose = () => {
+    if (passwordRecoveryPending) onClearPasswordRecovery();
+    onClose();
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md"
+      onClick={handleBackdropClose}
+    >
+      <AuthCard
+        variant="modal"
+        isConfigured={isConfigured}
+        configError={configError}
+        isDark={isDark}
+        passwordRecoveryPending={passwordRecoveryPending}
+        onLogin={onLogin}
+        onSignUp={onSignUp}
+        onSignedUpCommonUser={onSignedUpCommonUser}
+        onRequestPasswordReset={onRequestPasswordReset}
+        onCompletePasswordRecovery={onCompletePasswordRecovery}
+        onClearPasswordRecovery={onClearPasswordRecovery}
+        onSuccess={onSuccess}
+        onClose={onClose}
+      />
     </div>
   );
 }

@@ -9,7 +9,7 @@ import {
   Magnet, Sliders, PanelRightClose, PanelRightOpen, Shield, ShieldCheck,
   CheckSquare, Square,  AlignLeft, AlignCenter, Users, Eye,
   Camera as CameraIcon, Cloud, CloudOff, LogIn, UploadCloud, Loader2,
-  BookmarkCheck, ClipboardCheck
+  BookmarkCheck, ClipboardCheck, Info
 } from 'lucide-react';
 import {
   initialAreas, parseBackup, createId, DEFAULT_SCALE_RATIO, DEFAULT_WIDTH_METERS, DEFAULT_HEIGHT_METERS,
@@ -28,6 +28,7 @@ import { ROLE_METADATA } from '../lib/auth';
 import { useAuth } from '../hooks/use-auth';
 import { useSharedMap } from '../hooks/use-shared-map';
 import { AuthDialog } from '../components/auth/auth-dialog';
+import { MovareLoginScreen } from '../components/auth/movare-login-screen';
 import { AdminPanelDialog } from '../components/auth/admin-panel-dialog';
 import type { AccessPanelTab } from '../components/auth/profile-menu';
 import { MigrationDialog } from '../components/auth/migration-dialog';
@@ -340,6 +341,12 @@ export default function Editor() {
   const [renameDraft, setRenameDraft] = useState('');
   const [queuedImport, setQueuedImport] = useState<FloorArea[] | null>(null);
   const [showSplashScreen, setShowSplashScreen] = useState(true);
+  const [showLoginScreen, setShowLoginScreen] = useState(true);
+  useEffect(() => {
+    if (!auth.isLoading && auth.isAuthenticated) {
+      setShowLoginScreen(false);
+    }
+  }, [auth.isAuthenticated, auth.isLoading]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const canvasSizeRef = useRef({ width: 0, height: 0 });
 
@@ -4043,6 +4050,19 @@ export default function Editor() {
                     </button>
                   )}
                 </div>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMobileMenuOpen(false);
+                    setAccessPanelTab('about');
+                    setModal('access-panel');
+                  }}
+                  className="w-full py-1.5 px-2.5 rounded-lg bg-slate-800/80 hover:bg-slate-800 border border-slate-700/80 text-slate-200 font-semibold flex items-center justify-center gap-1.5"
+                >
+                  <Info className="w-3.5 h-3.5 text-red-400" />
+                  <span>Sobre o App &amp; Demonstração</span>
+                </button>
               </div>
 
               {/* Seção 1: Busca & Perfil Operacional */}
@@ -4484,6 +4504,8 @@ export default function Editor() {
         initialTab={accessPanelTab}
         onClose={() => setModal(null)}
         isDark={isDark}
+        areas={areas}
+        activeAreaId={activeId}
         isConfigured={auth.isConfigured}
         configError={auth.configError}
         user={auth.user}
@@ -4573,6 +4595,36 @@ export default function Editor() {
         onPublishLocalDraft={() => sharedMap.resolveConflictPublishLocalDraft()}
         onDismiss={() => sharedMap.dismissConflict()}
       />
+
+      {/* TELA DE LOGIN DEDICADA LOGO APÓS A TELA DE CARREGAMENTO */}
+      {!showSplashScreen && showLoginScreen && !auth.isAuthenticated && !auth.passwordRecoveryPending && (
+        <MovareLoginScreen
+          isDark={isDark}
+          onToggleTheme={toggleTheme}
+          areas={areas}
+          activeAreaId={activeId}
+          isConfigured={auth.isConfigured}
+          configError={auth.configError}
+          passwordRecoveryPending={auth.passwordRecoveryPending}
+          onLogin={auth.login}
+          onSignUp={auth.signUp}
+          onSignedUpCommonUser={(needsEmail) => {
+            setToast(
+              needsEmail
+                ? 'Conta criada! Confirme seu e-mail para aguardar a atribuição de cargo.'
+                : 'Conta de Usuário Comum criada! Aguarde o Administrador atribuir seu cargo.'
+            );
+          }}
+          onRequestPasswordReset={auth.requestPasswordReset}
+          onCompletePasswordRecovery={auth.completePasswordRecovery}
+          onClearPasswordRecovery={auth.clearPasswordRecovery}
+          onEnterAsVisitor={() => {
+            setShowLoginScreen(false);
+            setToast('Acesso como visitante ativo (modo consulta).');
+          }}
+          onAuthenticatedSuccess={() => setShowLoginScreen(false)}
+        />
+      )}
 
       {/* TELA DE CARREGAMENTO LENTA COM LOGOTIPO MOVARE */}
       {showSplashScreen && (
